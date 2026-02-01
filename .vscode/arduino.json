@@ -1,0 +1,7 @@
+{
+    "board": "rp2040:rp2040:rpipicow",
+    "sketch": "firmware/firmware.ino",
+    "configuration": "flash=2097152_131072,freq=200,opt=Small,profile=Disabled,rtti=Disabled,stackprotect=Disabled,exceptions=Disabled,dbgport=Disabled,dbglvl=None,usbstack=picosdk,wificountry=worldwide,ipbtstack=ipv4only,uploadmethod=default",
+    "output": "_build",
+    "port": "/dev/ttyACM1"
+}

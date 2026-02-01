@@ -1,0 +1,58 @@
+name: Create Release Tag
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [closed]
+
+jobs:
+  tag-release:
+    name: Tag Release
+    runs-on: ubuntu-latest
+    if: |
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/')
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Extract version from branch
+        id: version
+        run: |
+          VERSION=$(echo ${{ github.event.pull_request.head.ref }} | sed 's/release\///')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create release tag
+        run: |
+          git tag -a v${{ steps.version.outputs.version }} -m "Release ${{ steps.version.outputs.version }}"
+          git push origin v${{ steps.version.outputs.version }}
+
+      - name: Merge to develop
+        run: |
+          git checkout develop
+          git pull origin develop
+          git merge main --no-ff -m "Merge release branch v${{ steps.version.outputs.version }} back to develop"
+          git push origin develop
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body: |
+            # Release ${{ steps.version.outputs.version }}
+
+            See [CHANGELOG.md](CHANGELOG.md) for details.
+          draft: false
+          prerelease: false

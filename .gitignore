@@ -1,0 +1,66 @@
+# Build artifacts
+_build/
+build/
+dist/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Compiled binaries
+*.elf
+*.hex
+*.bin
+*.uf2
+
+# Dependency files
+*.d
+
+# IDE and editor files
+.vscode/c_cpp_properties.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+*.cbp
+*.depend
+*.layout
+
+# Arduino/PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Rust/Cargo
+target/
+Cargo.lock
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# KiCAD
+pcb/**/*.kicad_pcb-bak
+pcb/**/*-backups/
+pcb/**/*.zip
+
+# Temporary files
+*.tmp
+*.bak
+.swp
+.swo
+
+# User-specific files
+*.user
+local.properties

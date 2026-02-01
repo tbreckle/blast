@@ -1,0 +1,82 @@
+name: Build Firmware
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - "feature/**"
+      - "release/**"
+    paths:
+      - "firmware/**"
+      - "pcb/**"
+      - ".github/workflows/firmware-build.yml"
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - "firmware/**"
+      - "pcb/**"
+
+jobs:
+  build:
+    name: Build Firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Arduino CLI
+        uses: arduino/setup-arduino-cli@v1
+
+      - name: Add Raspberry Pi RP2040 Core
+        run: |
+          # Add the Raspberry Pi board package URL
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+
+          # Update indexes
+          arduino-cli core update-index
+
+          # Install RP2040 core
+          arduino-cli core install rp2040:rp2040
+
+      - name: Install Required Libraries
+        run: |
+          arduino-cli lib update-index
+          arduino-cli lib install "Adafruit BusIO"
+          arduino-cli lib install "Adafruit GFX Library"
+          arduino-cli lib install "Adafruit SSD1306"
+          arduino-cli lib install "Adafruit MCP23017 Arduino Library"
+
+      - name: Build Firmware
+        run: |
+          arduino-cli compile \
+            --fqbn rp2040:rp2040:generic \
+            --output-dir=firmware_build \
+            firmware/firmware.ino
+
+      - name: Upload Firmware Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-uf2
+          path: firmware_build/firmware.ino.uf2
+          retention-days: 30
+
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: |
+          cppcheck --enable=all --error-exitcode=1 \
+            --suppress=missingIncludeSystem \
+            --suppress=unusedFunction \
+            firmware/

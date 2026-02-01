@@ -1,0 +1,31 @@
+[package]
+name = "blast"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata.msc]
+subsystem = "windows"
+
+[dependencies]
+serialport = "4.5"
+eframe = "0.29"
+egui = "0.29"
+anyhow = "1.0"
+thiserror = "1.0"
+confy = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+
+[profile.dev]
+opt-level = 0           # No optimization.
+debug = true            # Full debug info.
+strip = false           # Keep symbols.
+debug-assertions = true
+overflow-checks = true
+incremental = true      # Faster recompilation.
+
+[profile.release]
+opt-level = 'z'   # Optimize for size.
+lto = true        # Enable Link Time Optimization.
+codegen-units = 1 # Better optimization.
+strip = true      # Strip symbols.
+panic = 'abort'   # Smaller panic handler.

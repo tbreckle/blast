@@ -1,0 +1,14 @@
+{
+    "C_Cpp.files.exclude": {
+        "_build/**": true,
+    },
+    "files.watcherExclude": {
+        "_build/**": true,
+    },
+    "search.exclude": {
+        "_build/**": true,
+    },
+    "files.exclude": {
+        "_build/**": true,
+    },
+}

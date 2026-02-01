@@ -1,0 +1,118 @@
+name: GitFlow Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., 1.0.0)"
+        required: true
+      release_type:
+        description: "Release type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Validate version format
+        run: |
+          if ! [[ "${{ github.event.inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version format. Use semantic versioning (e.g., 1.0.0)"
+            exit 1
+          fi
+
+      - name: Create release branch
+        run: |
+          git checkout develop
+          git pull origin develop
+          git checkout -b release/${{ github.event.inputs.version }}
+
+      - name: Update app version
+        run: |
+          sed -i 's/^version = .*/version = "${{ github.event.inputs.version }}"/' app/Cargo.toml
+          git add app/Cargo.toml
+
+      - name: Update firmware version
+        run: |
+          # Update version in firmware header if it exists
+          if grep -q "FIRMWARE_VERSION" firmware/firmware.ino; then
+            sed -i 's/#define FIRMWARE_VERSION .*/#define FIRMWARE_VERSION "${{ github.event.inputs.version }}"/' firmware/firmware.ino
+            git add firmware/firmware.ino
+          fi
+
+      - name: Commit version bump
+        run: |
+          git commit -m "chore: bump version to ${{ github.event.inputs.version }}"
+
+      - name: Push release branch
+        run: |
+          git push origin release/${{ github.event.inputs.version }}
+
+      - name: Create Pull Request to main
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Release ${{ github.event.inputs.version }}"
+          title: "Release ${{ github.event.inputs.version }}"
+          body: |
+            # Release ${{ github.event.inputs.version }}
+
+            This is an automated release PR following GitFlow.
+
+            - Release type: ${{ github.event.inputs.release_type }}
+            - Target: main branch
+
+            Please review and merge to create the release tag.
+          branch: release/${{ github.event.inputs.version }}
+          base: main
+          delete-branch: false
+          labels: release
+
+  build-artifacts:
+    name: Build Release Artifacts
+    runs-on: ${{ matrix.os }}
+    needs: release
+    if: success()
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/${{ github.event.inputs.version }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build app release
+        working-directory: ./app
+        run: cargo build --release
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: blast-${{ github.event.inputs.version }}-${{ runner.os }}
+          path: |
+            app/target/release/blast
+            app/target/release/blast.exe

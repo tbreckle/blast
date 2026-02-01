@@ -1,0 +1,60 @@
+# Auto detect text files and normalize line endings to LF
+* text=auto
+
+# Source code
+*.cpp text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.ino text eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Config files
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.xml text eol=lf
+*.toml text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+Makefile text eol=lf
+
+# Documentation
+*.md text eol=lf
+*.txt text eol=lf
+LICENSE text eol=lf
+README text eol=lf
+
+# Binary files
+*.bin binary
+*.elf binary
+*.hex binary
+*.uf2 binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.o binary
+*.a binary
+*.so binary
+*.dll binary
+*.exe binary
+*.dylib binary
+
+# Media files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.xcf binary
+
+# KiCAD files
+*.kicad_sch text eol=lf
+*.kicad_pro text eol=lf
+*.kicad_prl text eol=lf
+*.kicad_pcb text eol=lf
