@@ -110,7 +110,7 @@ For version history and release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-[Add your license here]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Contributing
 
