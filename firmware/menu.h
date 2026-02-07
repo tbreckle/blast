@@ -5,7 +5,7 @@
 #include "storage.h"
 
 // Menu states.
-enum MenuState { STATE_SPLASH, STATE_SELECT, STATE_PROFILE, STATE_SERVICEMENU };
+enum MenuState { STATE_NONE, STATE_SPLASH, STATE_SELECT, STATE_PROFILE, STATE_SERVICEMENU };
 
 // Profile menu entries.
 enum ProfileMenuItem { PROFILE_MENU_BACK = 0, PROFILE_MENU_EXIT = 1, PROFILE_MENU_SERVICE = 2, PROFILE_MENU_COUNT = 3 };

@@ -7,8 +7,16 @@
 #define REBOOT_BOOTSEL 0x00000007
 #endif
 
-// CRC-16-CCITT calculation.
 uint16_t calculateCRC16(const uint8_t* data, uint16_t length) {
+    /**
+     * Calculate CRC-16-CCITT checksum for data integrity verification.
+     *
+     * @param data Pointer to data buffer.
+     * @param length Length of data in bytes.
+     * @return The calculated 16-bit CRC value.
+     *
+     * Uses polynomial 0x1021 with initial value 0xFFFF.
+     */
     uint16_t crc = 0xFFFF;
     for (uint16_t i = 0; i < length; i++) {
         crc ^= (uint16_t)data[i] << 8;
@@ -23,8 +31,18 @@ uint16_t calculateCRC16(const uint8_t* data, uint16_t length) {
     return crc;
 }
 
-// SLIP encoding: escape special bytes.
 uint16_t slipEncode(const uint8_t* input, uint16_t inputLen, uint8_t* output, uint16_t outputMaxLen) {
+    /**
+     * Encode data using SLIP framing protocol.
+     *
+     * @param input Input data buffer.
+     * @param inputLen Length of input data.
+     * @param output Output buffer for encoded data.
+     * @param outputMaxLen Maximum size of output buffer.
+     * @return Length of encoded data, or 0 on error.
+     *
+     * Escapes SLIP_END (0xC0) and SLIP_ESC (0xDB) bytes and frames data with END bytes.
+     */
     uint16_t outIdx = 0;
 
     // Start with END byte.
@@ -55,8 +73,18 @@ uint16_t slipEncode(const uint8_t* input, uint16_t inputLen, uint8_t* output, ui
     return outIdx;
 }
 
-// SLIP decoding: unescape special bytes.
 uint16_t slipDecode(const uint8_t* input, uint16_t inputLen, uint8_t* output, uint16_t outputMaxLen) {
+    /**
+     * Decode SLIP-framed data.
+     *
+     * @param input Encoded input buffer.
+     * @param inputLen Length of encoded data.
+     * @param output Output buffer for decoded data.
+     * @param outputMaxLen Maximum size of output buffer.
+     * @return Length of decoded data, or 0 on error.
+     *
+     * Removes SLIP framing and unescapes special bytes.
+     */
     uint16_t outIdx = 0;
     bool escapeNext = false;
 
@@ -82,8 +110,16 @@ uint16_t slipDecode(const uint8_t* input, uint16_t inputLen, uint8_t* output, ui
     return outIdx;
 }
 
-// Send packet with SLIP framing.
 bool sendPacket(const Packet* packet) {
+    /**
+     * Send a packet with SLIP framing and CRC.
+     *
+     * @param packet Pointer to packet structure to send.
+     * @return True if packet was sent successfully, false otherwise.
+     *
+     * Builds raw packet with command, length, payload, and CRC,
+     * applies SLIP encoding, and transmits over serial.
+     */
     uint8_t rawBuffer[MAX_PACKET_SIZE];
     uint16_t rawIdx = 0;
 
@@ -121,8 +157,16 @@ bool sendPacket(const Packet* packet) {
     return true;
 }
 
-// Receive packet with SLIP framing
 bool receivePacket(Packet* packet, uint32_t timeoutMs) {
+    /**
+     * Receive a SLIP-framed packet from serial with timeout.
+     *
+     * @param packet Pointer to packet structure to fill.
+     * @param timeoutMs Timeout in milliseconds.
+     * @return True if valid packet received, false on timeout or error.
+     *
+     * Reads SLIP-framed data, decodes it, verifies CRC, and fills packet structure.
+     */
     uint8_t encodedBuffer[MAX_PACKET_SIZE * 2];
     uint16_t encodedIdx = 0;
     uint32_t startTime = millis();
@@ -229,8 +273,14 @@ bool receivePacket(Packet* packet, uint32_t timeoutMs) {
     return true;
 }
 
-// Send response packet.
 void sendResponse(uint8_t command, const uint8_t* data, uint16_t dataLen) {
+    /**
+     * Send a response packet to the host.
+     *
+     * @param command Response command byte.
+     * @param data Pointer to response data (can be nullptr).
+     * @param dataLen Length of response data.
+     */
     Packet response;
     response.command = command;
     response.length = dataLen;
@@ -242,26 +292,45 @@ void sendResponse(uint8_t command, const uint8_t* data, uint16_t dataLen) {
     sendPacket(&response);
 }
 
-// Send error response.
 void sendError(uint8_t errorCode) {
+    /**
+     * Send an error response to the host.
+     *
+     * @param errorCode The error code to send.
+     */
     const uint8_t errorData[1] = {errorCode};
     sendResponse(CMD_RESPONSE_ERROR, errorData, 1);
 }
 
-// Command handler: Get firmware version.
 void handleGetVersion() {
+    /**
+     * Handle GET_VERSION command.
+     *
+     * Sends firmware version (major, minor, patch) to the host.
+     */
     const uint8_t versionData[3] = {globalSettings.versionMajor, globalSettings.versionMinor,
                                     globalSettings.versionPatch};
     sendResponse(CMD_RESPONSE_OK, versionData, 3);
 }
 
-// Command handler: Get settings.
 void handleGetSettings() {
+    /**
+     * Handle GET_SETTINGS command.
+     *
+     * Sends current firmware settings to the host.
+     */
     sendResponse(CMD_RESPONSE_OK, reinterpret_cast<uint8_t*>(&globalSettings), sizeof(FirmwareSettings));
 }
 
-// Command handler: Set settings.
 void handleSetSettings(const uint8_t* payload, uint16_t length) {
+    /**
+     * Handle SET_SETTINGS command.
+     *
+     * @param payload Pointer to settings data.
+     * @param length Length of payload (must match FirmwareSettings size).
+     *
+     * Updates firmware settings from host data.
+     */
     if (length != sizeof(FirmwareSettings)) {
         sendError(ERR_INVALID_LENGTH);
         return;
@@ -271,8 +340,15 @@ void handleSetSettings(const uint8_t* payload, uint16_t length) {
     sendResponse(CMD_RESPONSE_OK, nullptr, 0);
 }
 
-// Command handler: Get profile.
 void handleGetProfile(const uint8_t* payload, uint16_t length) {
+    /**
+     * Handle GET_PROFILE command.
+     *
+     * @param payload Pointer to payload containing profile index.
+     * @param length Length of payload (must be 1).
+     *
+     * Loads and sends the requested profile to the host.
+     */
     if (length != 1) {
         sendError(ERR_INVALID_LENGTH);
         return;
@@ -289,8 +365,16 @@ void handleGetProfile(const uint8_t* payload, uint16_t length) {
     sendResponse(CMD_RESPONSE_OK, reinterpret_cast<uint8_t*>(&profile), sizeof(ButtonMapping));
 }
 
-// Command handler: Set profile.
 void handleSetProfile(const uint8_t* payload, uint16_t length) {
+    /**
+     * Handle SET_PROFILE command.
+     *
+     * @param payload Pointer to payload containing index and profile data.
+     * @param length Length of payload (must be ButtonMapping size + 1).
+     *
+     * Updates profile in RAM but does not save to EEPROM.
+     * Use SAVE_PROFILE to persist changes.
+     */
     if (length != sizeof(ButtonMapping) + 1) {
         sendError(ERR_INVALID_LENGTH);
         return;
@@ -310,8 +394,15 @@ void handleSetProfile(const uint8_t* payload, uint16_t length) {
     sendResponse(CMD_RESPONSE_OK, nullptr, 0);
 }
 
-// Command handler: Save profile to EEPROM.
 void handleSaveProfile(const uint8_t* payload, uint16_t length) {
+    /**
+     * Handle SAVE_PROFILE command.
+     *
+     * @param payload Pointer to payload containing index and profile data.
+     * @param length Length of payload (must be ButtonMapping size + 1).
+     *
+     * Saves profile to EEPROM and reloads menu display.
+     */
     if (length != sizeof(ButtonMapping) + 1) {
         sendError(ERR_INVALID_LENGTH);
         return;
@@ -333,20 +424,34 @@ void handleSaveProfile(const uint8_t* payload, uint16_t length) {
     sendResponse(CMD_RESPONSE_OK, nullptr, 0);
 }
 
-// Command handler: Get profile count.
 void handleGetProfileCount() {
+    /**
+     * Handle GET_PROFILE_COUNT command.
+     *
+     * Sends the number of used profiles to the host.
+     */
     uint8_t count = getNumberOfProfiles();
     sendResponse(CMD_RESPONSE_OK, &count, 1);
 }
 
-// Command handler: Get max profiles.
 void handleGetMaxProfiles() {
+    /**
+     * Handle GET_MAX_PROFILES command.
+     *
+     * Sends the maximum number of profiles supported to the host.
+     */
     uint8_t maxProfiles = MAX_PROFILES;
     sendResponse(CMD_RESPONSE_OK, &maxProfiles, 1);
 }
 
-// Main command processor.
 void processSerialCommand() {
+    /**
+     * Main serial command processor.
+     *
+     * Checks for incoming serial data, receives and parses packets,
+     * and dispatches to appropriate command handlers.
+     * Should be called regularly from the main loop.
+     */
     if (!Serial.available()) return;
 
 #ifdef DEBUG_SLIP
@@ -414,6 +519,12 @@ void processSerialCommand() {
 }
 
 void handleRebootFlash() {
+    /**
+     * Handle REBOOT_FLASH command.
+     *
+     * Sends confirmation response and reboots the device.
+     * User must hold BOOTSEL button during reboot to enter bootloader mode.
+     */
 #ifdef DEBUG_SLIP
     Serial2.println("[SLIP] Rebooting device...");
 #endif

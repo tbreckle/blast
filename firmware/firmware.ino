@@ -24,6 +24,8 @@ const uint8_t MAX_VISIBLE_PROFILES{4};
 
 // Global variables.
 MenuState currentMenuState{STATE_SPLASH};
+MenuState oldMenuState{STATE_NONE};
+
 uint8_t selectedProfileIndex{0};
 uint8_t selectedProfileMenuItem{0};
 uint32_t splashStartTime{0};
@@ -81,6 +83,18 @@ const uint8_t MCP_PIN_CURSOR_LEFT{4};
 const uint8_t MCP_PIN_CURSOR_RIGHT{5};
 const uint8_t MCP_PIN_ENTER{8};
 
+const uint8_t TLC_PIN_START_P1{1};
+const uint8_t TLC_PIN_START_P2{11};
+const uint8_t TLC_PIN_COIN_P1{2};
+const uint8_t TLC_PIN_COIN_P2{8};
+const uint8_t TLC_PIN_ACTION_P1_1{10};
+const uint8_t TLC_PIN_ACTION_P1_2{12};
+const uint8_t TLC_PIN_ACTION_P2_1{7};
+const uint8_t TLC_PIN_ACTION_P2_2{9};
+const uint8_t TLC_PIN_PAUSE{4};
+const uint8_t TLC_PIN_SAVE{5};
+const uint8_t TLC_PIN_LOAD{6};
+
 // MCP23017 interrupt pin definitions.
 const uint8_t PIN_MCP_INT_A{2};
 const uint8_t PIN_MCP_INT_B{1};
@@ -90,11 +104,29 @@ const uint8_t PIN_TLC_CLK{6};
 const uint8_t PIN_TLC_DOUT{7};
 
 // RGB status LED pin definitions.
-const uint8_t PIN_RGB_LED_R{16};
+const uint8_t PIN_RGB_LED_R{20};
 const uint8_t PIN_RGB_LED_G{18};
-const uint8_t PIN_RGB_LED_B{20};
+const uint8_t PIN_RGB_LED_B{16};
 
 const uint8_t PIN_RESET_MCP{21};
+
+// Map TLC LED pins to corresponding KeyCombo pointers in currentProfile.
+struct LedProfileMap {
+        uint8_t tlcPin;
+        KeyCombo* keyCombo;
+};
+
+LedProfileMap ledProfileMap[] = {{TLC_PIN_START_P1, &currentProfile.startP1},
+                                 {TLC_PIN_START_P2, &currentProfile.startP2},
+                                 {TLC_PIN_COIN_P1, &currentProfile.coinP1},
+                                 {TLC_PIN_COIN_P2, &currentProfile.coinP2},
+                                 {TLC_PIN_ACTION_P1_1, &currentProfile.actionP1_1},
+                                 {TLC_PIN_ACTION_P1_2, &currentProfile.actionP1_2},
+                                 {TLC_PIN_ACTION_P2_1, &currentProfile.actionP2_1},
+                                 {TLC_PIN_ACTION_P2_2, &currentProfile.actionP2_2},
+                                 {TLC_PIN_PAUSE, &currentProfile.pause},
+                                 {TLC_PIN_LOAD, &currentProfile.load},
+                                 {TLC_PIN_SAVE, &currentProfile.save}};
 
 // Devices.
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
@@ -102,6 +134,12 @@ Adafruit_MCP23X17 mcp;
 DebounceMCP debounceMcp(&mcp, PIN_MCP_INT_A, PIN_MCP_INT_B, 20, 1000, true);
 
 void loadProfileAfterStart() {
+    /**
+     * Load the first used profile from storage after startup.
+     *
+     * If no profiles are found, a default profile is created and saved.
+     *
+     */
     bool found = false;
     for (uint8_t i = 0; i < MAX_PROFILES; i++) {
         if (isProfileSlotUsed(i)) {
@@ -149,16 +187,38 @@ void loadProfileAfterStart() {
     }
 }
 
-// Apply gamma correction to 16-bit value (gamma = 2.8).
 uint16_t gammaCorrect16(uint16_t value) {
+    /**
+     * Apply gamma correction to a 16-bit LED brightness value.
+     *
+     * @param value The original 16-bit brightness value (0-65535).
+     * @return The gamma-corrected 16-bit brightness value (0-65535).
+     *
+     * Gamma correction is applied to ensure that the perceived brightness
+     * of the LED changes linearly with the input value. This is important
+     * for achieving smooth brightness transitions and consistent color representation.
+     * The gamma value used is 2.8, which is commonly used for LED applications.
+     *
+     */
     // Normalize to 0.0-1.0 range, apply gamma, scale back to 0-65535.
     float normalized = value / 65535.0;
     float corrected = pow(normalized, 2.8);
     return (uint16_t)(corrected * 65535.0 + 0.5);
 }
 
-// Apply gamma correction to 12-bit value (gamma = 2.8).
 uint16_t gammaCorrect12(uint16_t value) {
+    /**
+     * Apply gamma correction to a 12-bit LED brightness value.
+     *
+     * @param value The original 12-bit brightness value (0-4095).
+     * @return The gamma-corrected 12-bit brightness value (0-4095).
+     *
+     * Gamma correction is applied to ensure that the perceived brightness
+     * of the LED changes linearly with the input value. This is important
+     * for achieving smooth brightness transitions and consistent color representation.
+     * The gamma value used is 2.8, which is commonly used for LED applications.
+     *
+     */
     // Normalize to 0.0-1.0 range, apply gamma, scale back to 0-4095.
     float normalized = value / 4095.0;
     float corrected = pow(normalized, 2.8);
@@ -166,13 +226,53 @@ uint16_t gammaCorrect12(uint16_t value) {
 }
 
 void setRGBLed(uint16_t r, uint16_t g, uint16_t b) {
+    /**
+     * Set the RGB status LED color with gamma correction.
+     *
+     * @param r Red component (0-65535).
+     * @param g Green component (0-65535).
+     * @param b Blue component (0-65535).
+     *
+     */
     // Apply 16-bit gamma correction for smooth low-level transitions.
-    analogWrite(PIN_RGB_LED_R, gammaCorrect16(r));
-    analogWrite(PIN_RGB_LED_G, gammaCorrect16(g));
-    analogWrite(PIN_RGB_LED_B, gammaCorrect16(b));
+    analogWrite(PIN_RGB_LED_R, 65535 - gammaCorrect16(r));
+    analogWrite(PIN_RGB_LED_G, 65535 - gammaCorrect16(g));
+    analogWrite(PIN_RGB_LED_B, 65535 - gammaCorrect16(b));
+}
+
+void setRGBLedFailed() {
+    /**
+     * Indicate a failure state using the RGB status LED.
+     */
+    setRGBLed(65535, 0, 0);  // Set LED to red.
+}
+
+void setRGBLedSuccess(bool dim = false) {
+    /**
+     * Indicate a success state using the RGB status LED.
+     *
+     * @param dim If true, set to a dimmer blue color.
+     *
+     */
+    if (dim) {
+        setRGBLed(0, 0, 16384);
+    } else {
+        setRGBLed(0, 0, 65535);
+    }
 }
 
 void tlcSetLed(uint8_t channel, uint16_t value) {
+    /**
+     * Set the PWM value for a specific TLC59711 LED channel with gamma correction.
+     *
+     * @param channel The LED channel number (0-11).
+     * @param value The desired PWM value (0-4095).
+     *
+     * This function updates the PWM buffer for the specified channel only if the new value
+     * differs from the current value, marking the buffer as dirty for later update.
+     * Gamma correction is applied to ensure consistent brightness perception.
+     *
+     */
     if (channel >= 12) {
         return;
     }
@@ -186,6 +286,15 @@ void tlcSetLed(uint8_t channel, uint16_t value) {
 }
 
 void tlcUpdate() {
+    /**
+     * Update the TLC59711 LED driver with the current PWM buffer values.
+     *
+     * This function sends the PWM values to the TLC59711 only if there have been changes
+     * since the last update, as indicated by the `tlcDirty` flag.
+     * If no changes are detected, the function returns immediately to avoid unnecessary SPI communication.
+     * If changes are detected, it constructs the command sequence and transmitss the data via SPI.
+     *
+     */
     if (!tlcDirty) {
         return;
     }
@@ -229,24 +338,42 @@ void tlcUpdate() {
     SPI.endTransaction();
 }
 
-// Initialize a channel's LED mode.
-void ledSetMode(uint8_t channel, LedMode mode, uint16_t brightness = 4095, uint16_t period = 1000) {
-    if (channel >= 12) return;
+void ledSetMode(uint8_t channel, LedMode mode, uint16_t brightness = 4095, uint16_t period = 1000,
+                uint32_t phaseOffset = 0) {
+    /**
+     * Set the mode for a specific LED channel.
+     *
+     * @param channel The LED channel number (0-11).
+     * @param mode The desired LED mode (LED_OFF, LED_ON, LED_BREATHING, LED_BLINKING).
+     * @param brightness The brightness level (0-4095) for all modes.
+     * @param period The period in milliseconds for cyclic modes.
+     * @param phaseOffset The phase offset in milliseconds for staggered effects.
+     *
+     * @note If the channel number is invalid (>=12), the function returns without action.
+     *
+     */
+    if (channel >= 12) {
+        return;
+    }
 
     ledChannels[channel].mode = mode;
     ledChannels[channel].brightness = brightness;
     ledChannels[channel].period = period;
-    // Can be set separately for staggered effects.
-    ledChannels[channel].phaseOffset = 0;
+    ledChannels[channel].phaseOffset = phaseOffset;
 }
 
-// Update all LEDs based on their modes (call in loop()).
 void ledUpdate() {
-    uint32_t now = millis();
-
+    /**
+     * Update all LED channels based on their configured modes.
+     *
+     * This function calculates the appropriate brightness for each LED
+     * channel based on its mode (OFF, ON, BREATHING, BLINKING) and updates
+     * the TLC59711 accordingly.
+     *
+     */
     for (uint8_t i = 0; i < 12; i++) {
         uint16_t value = 0;
-        uint32_t time = now + ledChannels[i].phaseOffset;
+        uint32_t time = millis() + ledChannels[i].phaseOffset;
 
         switch (ledChannels[i].mode) {
             case LED_OFF:
@@ -283,8 +410,11 @@ void ledUpdate() {
     tlcUpdate();
 }
 
-// Scan I2C bus for devices.
 void scanI2C() {
+    /**
+     * Scan the I2C bus for connected devices and print their addresses to Serial2.
+     *
+     */
 #ifdef DEBUG
     Serial2.println("\nScanning I2C bus...");
 #endif
@@ -319,8 +449,159 @@ void scanI2C() {
 #endif
 }
 
+void handleMenuStateTransitions() {
+    /**
+     * Handle transitions between different menu states (and therefore general states).
+     *
+     */
+    if (currentMenuState != oldMenuState) {
+        // Menu state changed.
+        oldMenuState = currentMenuState;
+        if (currentMenuState == STATE_SELECT) {
+            // Splash/select mode - breathing effect.
+            for (uint8_t i = 0; i < 12; i++) {
+                ledSetMode(i, LED_BREATHING, 4095, 2000);
+            }
+            setRGBLedSuccess();
+        } else if (currentMenuState == STATE_PROFILE) {
+            // Selected profile - solid on.
+            for (uint8_t i = 0; i < 12; i++) {
+                ledSetMode(i, LED_OFF);
+            }
+
+            for (const auto& map : ledProfileMap) {
+                if (map.keyCombo->key != 0) {
+                    ledSetMode(map.tlcPin - 1, LED_ON, 4095);
+                }
+            }
+            setRGBLedSuccess(true);
+        } else if (currentMenuState == STATE_SPLASH) {
+            // Splash screen - fast blinking effect.
+            for (uint8_t i = 0; i < 12; i++) {
+                ledSetMode(i, LED_BLINKING, 4095, 200);
+            }
+        } else if (currentMenuState == STATE_SERVICEMENU) {
+            // Service menu - slow blinking effect.
+            for (uint8_t i = 0; i < 12; i++) {
+                ledSetMode(i, LED_BLINKING, 4095, 1000);
+            }
+            setRGBLedSuccess();
+        } else {
+            // Unknown state - turn off LEDs.
+#ifdef DEBUG
+            Serial2.print("Unknown menu state: ");
+            Serial2.println(currentMenuState);
+#endif
+            for (uint8_t i = 0; i < 12; i++) {
+                ledSetMode(i, LED_OFF);
+            }
+        }
+    }
+}
+
+void handleButtonPress(KeyCombo* key) {
+    /**
+     * Handle a single button press by sending the corresponding key combo.
+     *
+     * @param key Pointer to the KeyCombo structure representing the button press.
+     *
+     * @note This function presses the keys and starts a timer for releasing them.
+     *       The actual release is handled in the main loop based on keyPressTime.
+     *
+     */
+#ifdef DEBUG
+    Serial2.print("Button pressed - modifiers: ");
+    Serial2.print(key->modifiers);
+    Serial2.print(", key: ");
+    Serial2.println(key->key);
+#endif
+
+    if (key->modifiers & MOD_ESC) {
+#ifdef DEBUG
+        Serial2.println("Pressing ESC key.");
+#endif
+        Keyboard.press(KEY_ESC);
+    } else {
+        // Press modifier keys if needed.
+        if (key->modifiers & MOD_CTRL) {
+            Keyboard.press(KEY_LEFT_CTRL);
+        }
+        if (key->modifiers & MOD_ALT) {
+            Keyboard.press(KEY_LEFT_ALT);
+        }
+        if (key->modifiers & MOD_SHIFT) {
+            Keyboard.press(KEY_LEFT_SHIFT);
+        }
+
+        if (key->modifiers & MOD_F) {
+            // Map F1-F24.
+            uint8_t fKey = key->key;
+            if (fKey >= 1 && fKey <= 24) {
+#ifdef DEBUG
+                Serial2.print("Pressing F key: F");
+                Serial2.println(fKey);
+#endif
+                Keyboard.press(KEY_F1 + (fKey - 1));
+            }
+        } else {
+            // Regular key.
+            Keyboard.press(key->key);
+        }
+    }
+
+    // Start non-blocking timer for key release.
+    keyPressTime = globalSettings.keyPressDurationMs;
+    keyPressed = true;
+}
+
+void handleButtons() {
+    /**
+     * Handle button presses from MCP23017 via DebounceMCP.
+     *
+     * Checks each button channel and triggers the corresponding key press.
+     *
+     */
+    if (debounceMcp.channelPressed(MCP_PIN_START_P1 - 1)) {
+        handleButtonPress(&currentProfile.startP1);
+    }
+    if (debounceMcp.channelPressed(MCP_PIN_START_P2 - 1)) {
+        handleButtonPress(&currentProfile.startP2);
+    }
+    if (debounceMcp.channelPressed(MCP_PIN_COIN_P1 - 1)) {
+        handleButtonPress(&currentProfile.coinP1);
+    }
+    if (debounceMcp.channelPressed(MCP_PIN_COIN_P2 - 1)) {
+        handleButtonPress(&currentProfile.coinP2);
+    }
+    if (debounceMcp.channelPressed(MCP_PIN_ACTION_P1_1 - 1)) {
+        handleButtonPress(&currentProfile.actionP1_1);
+    }
+    if (debounceMcp.channelPressed(MCP_PIN_ACTION_P1_2 - 1)) {
+        handleButtonPress(&currentProfile.actionP1_2);
+    }
+    if (debounceMcp.channelPressed(MCP_PIN_ACTION_P2_1 - 1)) {
+        handleButtonPress(&currentProfile.actionP2_1);
+    }
+    if (debounceMcp.channelPressed(MCP_PIN_ACTION_P2_2 - 1)) {
+        handleButtonPress(&currentProfile.actionP2_2);
+    }
+    if (debounceMcp.channelPressed(MCP_PIN_PAUSE - 1)) {
+        handleButtonPress(&currentProfile.pause);
+    }
+    if (debounceMcp.channelPressed(MCP_PIN_LOAD - 1)) {
+        handleButtonPress(&currentProfile.load);
+    }
+    if (debounceMcp.channelPressed(MCP_PIN_SAVE - 1)) {
+        handleButtonPress(&currentProfile.save);
+    }
+}
+
 void setup() {
-    // Serial (aka Serial1) is USB CDC and used for main communication.
+    /**
+     * Controller initialization.
+     *
+     */
+    // Serial (aka Serial1) is USB CDC and used for main communication with host.
     Serial.begin(115200);
     // Serial2 is HW UART 1 and used for debug output.
     // Initialize Serial2 on GP8 (TX) and GP9 (RX) for debug output.
@@ -329,7 +610,7 @@ void setup() {
     Serial2.begin(115200);
 
 #ifdef DEBUG
-    delay(2500);
+    // delay(2500);
     Serial2.println("B.L.A.S.T. initializing.");
 #endif
 
@@ -387,7 +668,7 @@ void setup() {
         Serial2.flush();
 #endif
         // Red LED for error.
-        setRGBLed(255, 0, 0);
+        setRGBLedFailed();
         while (1);
     }
     display.clearDisplay();
@@ -415,7 +696,7 @@ void setup() {
         Serial2.flush();
 #endif
         // Red LED for error.
-        setRGBLed(255, 0, 0);
+        setRGBLedFailed();
         while (1);
     }
 
@@ -448,10 +729,8 @@ void setup() {
 
     // Initialize all LED channels to off.
     for (uint8_t i = 0; i < 12; i++) {
-        // ledSetMode(i, LED_OFF);
-        ledSetMode(i, LED_BREATHING, 4095, 2000);
+        ledSetMode(i, LED_OFF);
     }
-    // ledSetMode(0, LED_BREATHING, 4095, 2000);
     ledUpdate();
 
 #ifdef DEBUG
@@ -478,10 +757,14 @@ void setup() {
     Serial2.println("Initialization complete.");
 #endif
     // Switch to blue LED to indicate ready state.
-    setRGBLed(0, 0, 65535);
+    setRGBLedSuccess();
 }
 
 void loop() {
+    /**
+     * Main loop.
+     *
+     */
 #ifdef DEBUG_LOOPTIME
     static uint32_t lastPrintTime = 0;
     static uint32_t minLoopTime = UINT32_MAX;
@@ -490,6 +773,8 @@ void loop() {
     static uint32_t loopCount = 0;
     uint32_t loopStartTime = micros();
 #endif
+
+    handleMenuStateTransitions();
 
     if (digitalRead(PIN_MCP_INT_A) == LOW && (millis() - lockTimeIntA >= 5)) {
         mcp.clearInterrupts();
@@ -522,39 +807,7 @@ void loop() {
 
     // Check for button press events (only in profile mode, not during menu).
     if (currentMenuState == STATE_PROFILE && !keyPressed) {
-        if (debounceMcp.channelPressed(MCP_PIN_START_P1 - 1)) {
-            handleButtonPress(&currentProfile.startP1);
-        }
-        if (debounceMcp.channelPressed(MCP_PIN_START_P2 - 1)) {
-            handleButtonPress(&currentProfile.startP2);
-        }
-        if (debounceMcp.channelPressed(MCP_PIN_COIN_P1 - 1)) {
-            handleButtonPress(&currentProfile.coinP1);
-        }
-        if (debounceMcp.channelPressed(MCP_PIN_COIN_P2 - 1)) {
-            handleButtonPress(&currentProfile.coinP2);
-        }
-        if (debounceMcp.channelPressed(MCP_PIN_ACTION_P1_1 - 1)) {
-            handleButtonPress(&currentProfile.actionP1_1);
-        }
-        if (debounceMcp.channelPressed(MCP_PIN_ACTION_P1_2 - 1)) {
-            handleButtonPress(&currentProfile.actionP1_2);
-        }
-        if (debounceMcp.channelPressed(MCP_PIN_ACTION_P2_1 - 1)) {
-            handleButtonPress(&currentProfile.actionP2_1);
-        }
-        if (debounceMcp.channelPressed(MCP_PIN_ACTION_P2_2 - 1)) {
-            handleButtonPress(&currentProfile.actionP2_2);
-        }
-        if (debounceMcp.channelPressed(MCP_PIN_PAUSE - 1)) {
-            handleButtonPress(&currentProfile.pause);
-        }
-        if (debounceMcp.channelPressed(MCP_PIN_LOAD - 1)) {
-            handleButtonPress(&currentProfile.load);
-        }
-        if (debounceMcp.channelPressed(MCP_PIN_SAVE - 1)) {
-            handleButtonPress(&currentProfile.save);
-        }
+        handleButtons();
     }
 
     processSerialCommand();
@@ -593,50 +846,4 @@ void loop() {
         loopCount = 0;
     }
 #endif
-}
-
-void handleButtonPress(KeyCombo* key) {
-#ifdef DEBUG
-    Serial2.print("Button pressed - modifiers: ");
-    Serial2.print(key->modifiers);
-    Serial2.print(", key: ");
-    Serial2.println(key->key);
-#endif
-
-    if (key->modifiers & MOD_ESC) {
-#ifdef DEBUG
-        Serial2.println("Pressing ESC key.");
-#endif
-        Keyboard.press(KEY_ESC);
-    } else {
-        // Press modifier keys if needed.
-        if (key->modifiers & MOD_CTRL) {
-            Keyboard.press(KEY_LEFT_CTRL);
-        }
-        if (key->modifiers & MOD_ALT) {
-            Keyboard.press(KEY_LEFT_ALT);
-        }
-        if (key->modifiers & MOD_SHIFT) {
-            Keyboard.press(KEY_LEFT_SHIFT);
-        }
-
-        if (key->modifiers & MOD_F) {
-            // Map F1-F24.
-            uint8_t fKey = key->key;
-            if (fKey >= 1 && fKey <= 24) {
-#ifdef DEBUG
-                Serial2.print("Pressing F key: F");
-                Serial2.println(fKey);
-#endif
-                Keyboard.press(KEY_F1 + (fKey - 1));
-            }
-        } else {
-            // Regular key.
-            Keyboard.press(key->key);
-        }
-    }
-
-    // Start non-blocking timer for key release.
-    keyPressTime = globalSettings.keyPressDurationMs;
-    keyPressed = true;
 }

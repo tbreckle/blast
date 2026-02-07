@@ -1,6 +1,12 @@
 #include "menu.h"
 
 void displayProfileSelect() {
+    /**
+     * Display the profile selection screen.
+     *
+     * Shows a scrollable list of available profiles with the selected profile highlighted.
+     * Displays up to MAX_VISIBLE_PROFILES at a time with the selection centered when possible.
+     */
 #ifdef DEBUG
     Serial2.println("Displaying profile selection menu.");
 #endif
@@ -79,6 +85,12 @@ void displayProfileSelect() {
 }
 
 void displayProfileMenu() {
+    /**
+     * Display the profile configuration menu.
+     *
+     * Shows menu options: BACK (return to selection), EXIT (exit to game), and SERVICE (test menu).
+     * The currently selected menu item is highlighted.
+     */
 #ifdef DEBUG
     Serial2.println("Displaying profile menu.");
 #endif
@@ -116,6 +128,15 @@ void displayProfileMenu() {
 }
 
 void displayServiceMenu() {
+    /**
+     * Display the service/test menu.
+     *
+     * Shows a directional layout for service and test buttons:
+     * - North: Service P2
+     * - East: Test P1
+     * - South: Service P1
+     * - West: Test P2
+     */
 #ifdef DEBUG
     Serial2.println("Displaying service menu.");
 #endif
@@ -154,6 +175,11 @@ void displayServiceMenu() {
 }
 
 void requestRedraw() {
+    /**
+     * Request a display redraw on the next update cycle.
+     *
+     * Sets the redraw flag to trigger screen refresh in updateDisplay().
+     */
 #ifdef DEBUG
     Serial2.println("Redraw requested.");
 #endif
@@ -161,6 +187,11 @@ void requestRedraw() {
 }
 
 void setMenuState(MenuState newState) {
+    /**
+     * Change the current menu state and request a redraw.
+     *
+     * @param newState The new menu state to transition to.
+     */
 #ifdef DEBUG
     Serial2.print("Changing menu state to ");
     Serial2.println(newState);
@@ -170,6 +201,12 @@ void setMenuState(MenuState newState) {
 }
 
 void updateDisplay() {
+    /**
+     * Update the display based on the current menu state.
+     *
+     * Handles splash screen timeout and redraws the appropriate screen
+     * when the redraw flag is set.
+     */
     if (currentMenuState == STATE_SPLASH) {
         if (millis() - splashStartTime > 2000) {
             setMenuState(STATE_SELECT);
@@ -191,6 +228,17 @@ void updateDisplay() {
 }
 
 void handleMenuNavigation(bool up, bool right, bool down, bool left, bool enter) {
+    /**
+     * Handle navigation inputs for the menu system.
+     *
+     * @param up Navigation up pressed.
+     * @param right Navigation right pressed.
+     * @param down Navigation down pressed.
+     * @param left Navigation left pressed.
+     * @param enter Enter/Select pressed.
+     *
+     * Processes navigation differently based on current menu state.
+     */
     if (currentMenuState == STATE_SELECT) {
         if (up) {
             if (selectedProfileIndex > 0 && isProfileSlotUsed(selectedProfileIndex - 1)) {
