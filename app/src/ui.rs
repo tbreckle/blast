@@ -58,6 +58,27 @@ const FIELD_SAVE: usize = 13;
 const FIELD_LOAD: usize = 14;
 const FIELD_EXIT: usize = 15;
 
+enum SyncResult {
+    Connected {
+        connection: FirmwareConnection,
+        profiles: Vec<ButtonMapping>,
+        version: FirmwareVersion,
+        port_name: String,
+    },
+    Reloaded {
+        connection: FirmwareConnection,
+        profiles: Vec<ButtonMapping>,
+    },
+    Saved {
+        connection: FirmwareConnection,
+    },
+    Rebooted,
+    Error {
+        connection: Option<FirmwareConnection>,
+        message: String,
+    },
+}
+
 pub struct BlastApp {
     // Connection state.
     serial_ports: Vec<SerialPortInfo>,
@@ -73,6 +94,7 @@ pub struct BlastApp {
     // UI state.
     is_syncing: bool,
     sync_message: String,
+    pending_result: Option<mpsc::Receiver<SyncResult>>,
     show_profile_editor: bool,
     show_delete_confirmation: bool,
     show_reload_confirmation: bool,
@@ -108,6 +130,7 @@ impl Default for BlastApp {
             is_dirty: false,
             is_syncing: false,
             sync_message: String::new(),
+            pending_result: None,
             show_profile_editor: false,
             show_delete_confirmation: false,
             show_reload_confirmation: false,
@@ -133,8 +156,8 @@ impl BlastApp {
 
         let port_name_clone = port_name.clone();
         let (tx, rx) = mpsc::channel();
+        self.pending_result = Some(rx);
 
-        // Spawn connection attempt in a separate thread.
         thread::spawn(move || {
             let result = (|| -> Result<(FirmwareConnection, Vec<ButtonMapping>, FirmwareVersion), String> {
                 let port = serialport::new(&port_name_clone, 115200)
@@ -144,40 +167,28 @@ impl BlastApp {
 
                 let mut conn = FirmwareConnection::new(port);
 
-                // Get firmware version.
                 let version = conn.get_version()
                     .map_err(|e| format!("Failed to read firmware version: {}", e))?;
 
-                // Get all profiles.
                 let profiles = conn.get_all_profiles()
                     .map_err(|e| format!("Connection failed: Not a valid Blast device or communication error: {}", e))?;
 
                 Ok((conn, profiles, version))
             })();
 
-            let _ = tx.send(result);
+            let _ = tx.send(match result {
+                Ok((connection, profiles, version)) => SyncResult::Connected {
+                    connection,
+                    profiles,
+                    version,
+                    port_name,
+                },
+                Err(message) => SyncResult::Error {
+                    connection: None,
+                    message,
+                },
+            });
         });
-
-        // Wait for result with 1 second timeout.
-        match rx.recv_timeout(Duration::from_secs(1)) {
-            Ok(Ok((conn, profiles, version))) => {
-                self.profiles = profiles;
-                self.connection = Some(conn);
-                self.selected_port = Some(port_name);
-                self.firmware_version = Some(version);
-                self.is_dirty = false;
-                self.error_message = None;
-            }
-            Ok(Err(e)) => {
-                self.error_message = Some(e);
-            }
-            Err(_) => {
-                self.error_message =
-                    Some("Connection timeout: Device not responding within 1 second".to_string());
-            }
-        }
-
-        self.is_syncing = false;
     }
 
     fn disconnect(&mut self) {
@@ -189,95 +200,158 @@ impl BlastApp {
     }
 
     fn reload_data(&mut self) {
-        if let Some(conn) = &mut self.connection {
+        if let Some(conn) = self.connection.take() {
             self.is_syncing = true;
             self.sync_message = "Reloading data...".to_string();
             self.error_message = None;
 
-            match conn.get_all_profiles() {
-                Ok(profiles) => {
-                    self.profiles = profiles;
-                    self.is_dirty = false;
-                }
-                Err(e) => {
-                    self.error_message = Some(format!("Failed to reload profiles: {}", e));
-                }
-            }
+            let (tx, rx) = mpsc::channel();
+            self.pending_result = Some(rx);
 
-            self.is_syncing = false;
+            thread::spawn(move || {
+                let mut conn = conn;
+                let _ = tx.send(match conn.get_all_profiles() {
+                    Ok(profiles) => SyncResult::Reloaded {
+                        connection: conn,
+                        profiles,
+                    },
+                    Err(e) => SyncResult::Error {
+                        connection: Some(conn),
+                        message: format!("Failed to reload profiles: {}", e),
+                    },
+                });
+            });
         }
     }
 
     fn save_data(&mut self) {
-        if let Some(conn) = &mut self.connection {
+        if let Some(conn) = self.connection.take() {
             self.is_syncing = true;
             self.sync_message = "Saving profiles...".to_string();
             self.error_message = None;
 
-            // Get max profiles supported by firmware.
-            let max_profiles = match conn.get_max_profiles() {
-                Ok(max) => max as usize,
-                Err(e) => {
-                    self.error_message = Some(format!("Failed to query max profiles: {}", e));
-                    self.is_syncing = false;
-                    return;
-                }
-            };
+            let profiles = self.profiles.clone();
+            let (tx, rx) = mpsc::channel();
+            self.pending_result = Some(rx);
 
-            // Send all profiles in the list.
-            for (idx, profile) in self.profiles.iter().enumerate() {
-                if idx >= max_profiles {
-                    self.error_message = Some(format!(
-                        "Too many profiles: {} exceeds firmware limit of {}.",
-                        self.profiles.len(),
-                        max_profiles
-                    ));
-                    break;
-                }
-                if let Err(e) = conn.save_profile(idx as u8, profile) {
-                    self.error_message = Some(format!("Failed to save profile {}: {}", idx, e));
-                    break;
-                }
-            }
+            thread::spawn(move || {
+                let mut conn = conn;
+                let result = (|| -> Result<(), String> {
+                    let max_profiles = conn
+                        .get_max_profiles()
+                        .map_err(|e| format!("Failed to query max profiles: {}", e))?
+                        as usize;
 
-            // Clear any remaining slots with empty profiles.
-            if self.error_message.is_none() {
-                for idx in self.profiles.len()..max_profiles {
-                    let empty_profile = ButtonMapping::default();
-                    if let Err(e) = conn.save_profile(idx as u8, &empty_profile) {
-                        self.error_message =
-                            Some(format!("Failed to clear profile slot {}: {}", idx, e));
-                        break;
+                    for (idx, profile) in profiles.iter().enumerate() {
+                        if idx >= max_profiles {
+                            return Err(format!(
+                                "Too many profiles: {} exceeds firmware limit of {}.",
+                                profiles.len(),
+                                max_profiles
+                            ));
+                        }
+                        conn.save_profile(idx as u8, profile)
+                            .map_err(|e| format!("Failed to save profile {}: {}", idx, e))?;
                     }
-                }
-            }
 
-            if self.error_message.is_none() {
-                self.is_dirty = false;
-            }
+                    for idx in profiles.len()..max_profiles {
+                        let empty_profile = ButtonMapping::default();
+                        conn.save_profile(idx as u8, &empty_profile)
+                            .map_err(|e| format!("Failed to clear profile slot {}: {}", idx, e))?;
+                    }
 
-            self.is_syncing = false;
+                    Ok(())
+                })();
+
+                let _ = tx.send(match result {
+                    Ok(()) => SyncResult::Saved { connection: conn },
+                    Err(message) => SyncResult::Error {
+                        connection: Some(conn),
+                        message,
+                    },
+                });
+            });
         }
     }
 
     fn reboot_device(&mut self) {
-        if let Some(conn) = &mut self.connection {
+        if let Some(conn) = self.connection.take() {
             self.is_syncing = true;
             self.sync_message = "Rebooting device...".to_string();
             self.error_message = None;
 
-            match conn.reboot_flash() {
-                Ok(_) => {
-                    self.error_message = Some("Device reboot command sent.".to_string());
-                    // Disconnect after reboot since device will restart.
-                    self.disconnect();
+            let (tx, rx) = mpsc::channel();
+            self.pending_result = Some(rx);
+
+            thread::spawn(move || {
+                let mut conn = conn;
+                let _ = tx.send(match conn.reboot_flash() {
+                    Ok(_) => SyncResult::Rebooted,
+                    Err(e) => SyncResult::Error {
+                        connection: Some(conn),
+                        message: format!("Failed to reboot device: {}", e),
+                    },
+                });
+            });
+        }
+    }
+
+    fn poll_pending_result(&mut self) {
+        if let Some(rx) = &self.pending_result {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.pending_result = None;
+                    self.is_syncing = false;
+                    match result {
+                        SyncResult::Connected {
+                            connection,
+                            profiles,
+                            version,
+                            port_name,
+                        } => {
+                            self.connection = Some(connection);
+                            self.profiles = profiles;
+                            self.firmware_version = Some(version);
+                            self.selected_port = Some(port_name);
+                            self.is_dirty = false;
+                        }
+                        SyncResult::Reloaded {
+                            connection,
+                            profiles,
+                        } => {
+                            self.connection = Some(connection);
+                            self.profiles = profiles;
+                            self.is_dirty = false;
+                        }
+                        SyncResult::Saved { connection } => {
+                            self.connection = Some(connection);
+                            self.is_dirty = false;
+                        }
+                        SyncResult::Rebooted => {
+                            self.disconnect();
+                            self.error_message =
+                                Some("Device reboot command sent.".to_string());
+                        }
+                        SyncResult::Error {
+                            connection,
+                            message,
+                        } => {
+                            self.connection = connection;
+                            self.error_message = Some(message);
+                        }
+                    }
                 }
-                Err(e) => {
-                    self.error_message = Some(format!("Failed to reboot device: {}", e));
+                Err(mpsc::TryRecvError::Empty) => {
+                    // Still waiting — nothing to do.
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    // Thread dropped sender without sending (e.g. panic).
+                    self.pending_result = None;
+                    self.is_syncing = false;
+                    self.error_message =
+                        Some("Operation failed unexpectedly.".to_string());
                 }
             }
-
-            self.is_syncing = false;
         }
     }
 
@@ -733,13 +807,37 @@ impl BlastApp {
 
     fn render_syncing_overlay(&self, ctx: &egui::Context) {
         if self.is_syncing {
-            egui::Window::new("Syncing")
-                .collapsible(false)
-                .resizable(false)
+            let screen_rect = ctx.screen_rect();
+
+            // Full-screen semi-transparent backdrop that captures all input.
+            egui::Area::new(egui::Id::new("syncing_overlay_backdrop"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(screen_rect.min)
+                .show(ctx, |ui| {
+                    let response = ui.allocate_response(
+                        screen_rect.size(),
+                        egui::Sense::click_and_drag(),
+                    );
+                    let painter = ui.painter();
+                    painter.rect_filled(
+                        response.rect,
+                        0.0,
+                        egui::Color32::from_black_alpha(180),
+                    );
+                });
+
+            // Centered message and spinner on top.
+            egui::Area::new(egui::Id::new("syncing_overlay_content"))
+                .order(egui::Order::Foreground)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label(&self.sync_message);
-                    ui.spinner();
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.spinner();
+                            ui.add_space(8.0);
+                            ui.label(&self.sync_message);
+                        });
+                    });
                 });
         }
     }
@@ -1016,6 +1114,8 @@ impl BlastApp {
 
 impl eframe::App for BlastApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_pending_result();
+
         self.render_top_panel(ctx);
         self.render_status_bar(ctx);
         self.render_profile_list(ctx);
@@ -1024,5 +1124,10 @@ impl eframe::App for BlastApp {
         self.render_reload_confirmation(ctx);
         self.render_profile_editor(ctx);
         self.handle_key_capture(ctx);
+
+        // Keep repainting while waiting for background operation.
+        if self.is_syncing {
+            ctx.request_repaint();
+        }
     }
 }
