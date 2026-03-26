@@ -86,9 +86,10 @@ class DebounceMCP {
         uint8_t intPinA;  // Arduino pin for INT A
         uint8_t intPinB;  // Arduino pin for INT B
 
-        uint8_t previousState[MCP_23017_CHANNELS];           // Previous state of each channel
-        uint8_t pressedState[MCP_23017_CHANNELS];            // Current pressed state of each channel
-        unsigned long lastDebounceTime[MCP_23017_CHANNELS];  // Last debounce time for each channel
+        uint8_t rawState[MCP_23017_CHANNELS];                  // Last raw GPIO reading per channel
+        uint8_t debouncedState[MCP_23017_CHANNELS];          // Accepted stable state per channel
+        uint8_t pressedState[MCP_23017_CHANNELS];            // Pending press events per channel
+        unsigned long lastDebounceTime[MCP_23017_CHANNELS];  // When raw state last changed
 
         unsigned long debounceDelay;  // Debounce delay in ms (default 20)
         unsigned long pollInterval;   // Full poll interval in ms (default 1000)

@@ -510,10 +510,24 @@ void handleButtonPress(KeyCombo* key) {
      *
      */
 #ifdef DEBUG
-    Serial2.print("Button pressed - modifiers: ");
-    Serial2.print(key->modifiers);
+    Serial2.print("Button pressed - modifiers:");
+    if (key->modifiers == MOD_NONE) Serial2.print(" NONE");
+    if (key->modifiers & MOD_CTRL) Serial2.print(" CTRL");
+    if (key->modifiers & MOD_ALT) Serial2.print(" ALT");
+    if (key->modifiers & MOD_SHIFT) Serial2.print(" SHIFT");
+    if (key->modifiers & MOD_F) Serial2.print(" F-KEY");
+    if (key->modifiers & MOD_ESC) Serial2.print(" ESC");
     Serial2.print(", key: ");
-    Serial2.println(key->key);
+    if (key->modifiers & MOD_F) {
+        Serial2.print("F");
+        Serial2.println(key->key);
+    } else if (key->modifiers & MOD_ESC) {
+        Serial2.println("ESC");
+    } else if (key->key >= 32 && key->key <= 126) {
+        Serial2.println((char)key->key);
+    } else {
+        Serial2.println(key->key);
+    }
 #endif
 
     if (key->modifiers & MOD_ESC) {
@@ -550,7 +564,7 @@ void handleButtonPress(KeyCombo* key) {
     }
 
     // Start non-blocking timer for key release.
-    keyPressTime = globalSettings.keyPressDurationMs;
+    keyPressTime = millis();
     keyPressed = true;
 }
 
@@ -777,12 +791,10 @@ void loop() {
     handleMenuStateTransitions();
 
     if (digitalRead(PIN_MCP_INT_A) == LOW && (millis() - lockTimeIntA >= 5)) {
-        mcp.clearInterrupts();
         debounceMcp.interruptA();
         lockTimeIntA = millis();
     }
     if (digitalRead(PIN_MCP_INT_B) == LOW && (millis() - lockTimeIntB >= 5)) {
-        mcp.clearInterrupts();
         debounceMcp.interruptB();
         lockTimeIntB = millis();
     }
@@ -800,13 +812,13 @@ void loop() {
     updateDisplay();
 
     // Handle key release after non-blocking delay.
-    if (keyPressed && (millis() - keyPressTime >= 10)) {
+    if (keyPressed && (millis() - keyPressTime >= globalSettings.keyPressDurationMs)) {
         Keyboard.releaseAll();
         keyPressed = false;
     }
 
     // Check for button press events (only in profile mode, not during menu).
-    if (currentMenuState == STATE_PROFILE && !keyPressed) {
+    if ((currentMenuState == STATE_PROFILE || currentMenuState == STATE_SERVICEMENU) && !keyPressed) {
         handleButtons();
     }
 

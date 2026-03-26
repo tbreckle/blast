@@ -12,15 +12,13 @@ DebounceMCP::DebounceMCP(Adafruit_MCP23X17* mcpPtr, uint8_t intA, uint8_t intB, 
       pollInterval(poll),
       lastFullPoll(0),
       activeLow(activeLow_) {
-    // Allocate memory for state tracking arrays.
-    // Use fixed-size arrays; just clear them.
-
-    // Initialize arrays.
-    memset(previousState, 0, sizeof(previousState));
+    // Initialize to idle state (pull-up = 1 for active-low).
+    uint8_t idleState = activeLow ? 1 : 0;
+    memset(rawState, idleState, sizeof(rawState));
+    memset(debouncedState, idleState, sizeof(debouncedState));
     memset(pressedState, 0, sizeof(pressedState));
     memset(lastDebounceTime, 0, sizeof(lastDebounceTime));
 
-    // Initialize pending interrupt flags.
     pendingIntA = false;
     pendingIntB = false;
 }
@@ -29,9 +27,6 @@ DebounceMCP::~DebounceMCP() {}
 
 void DebounceMCP::update() {
     unsigned long currentTime = millis();
-
-    // Reset pressed state at the beginning of each update cycle.
-    memset(pressedState, 0, sizeof(pressedState));
 
     // Handle pending interrupts signaled by external handlers.
     if (pendingIntA) {
@@ -50,11 +45,22 @@ void DebounceMCP::update() {
         readPort(1);
     }
 
+    // Check if any channel's raw state has been stable long enough to accept.
+    for (uint8_t ch = 0; ch < MCP_23017_CHANNELS; ch++) {
+        if (rawState[ch] != debouncedState[ch]) {
+            if (currentTime - lastDebounceTime[ch] >= debounceDelay) {
+                debouncedState[ch] = rawState[ch];
+                const bool isActive = activeLow ? (rawState[ch] == 0) : (rawState[ch] == 1);
+                if (isActive) {
+                    pressedState[ch] = 1;
+                }
+            }
+        }
+    }
+
     // Perform full poll periodically to catch any missed interrupts.
     if (currentTime - lastFullPoll >= pollInterval) {
         lastFullPoll = currentTime;
-
-        // Poll both ports.
         readPort(0);
         readPort(1);
     }
@@ -73,7 +79,11 @@ bool DebounceMCP::channelPressed(uint8_t channel) {
     if (channel >= 16) {
         return false;
     }
-    return pressedState[channel] != 0;
+    // Consume the press event on read so it persists across update()
+    // cycles until actually handled.
+    bool wasPressed = pressedState[channel] != 0;
+    pressedState[channel] = 0;
+    return wasPressed;
 }
 
 void DebounceMCP::setDebounceDelay(unsigned long delay) {
@@ -88,7 +98,6 @@ void DebounceMCP::readPort(uint8_t port) {
     uint8_t portData = 0;
     uint8_t startChannel = 0;
 
-    // Read appropriate GPIO register.
     if (port == 0) {
         portData = mcp->readGPIOA();
         startChannel = 0;
@@ -99,33 +108,20 @@ void DebounceMCP::readPort(uint8_t port) {
 
     unsigned long currentTime = millis();
 
-    // Process each channel in this port.
     for (uint8_t i = 0; i < 8; i++) {
         uint8_t channel = startChannel + i;
-        // Channel is guaranteed within 0..15.
-
-        // Extract bit for this channel.
         uint8_t newState = (portData >> i) & 0x01;
 
-        // Check if enough time has passed since last debounce for this channel.
-        if (currentTime - lastDebounceTime[channel] >= debounceDelay) {
-            processChannel(channel, newState);
+        // If raw state changed, restart the debounce timer.
+        if (newState != rawState[channel]) {
+            rawState[channel] = newState;
             lastDebounceTime[channel] = currentTime;
         }
     }
 }
 
 void DebounceMCP::processChannel(uint8_t channel, uint8_t newState) {
-    // Check if state changed from previous state.
-    if (newState != previousState[channel]) {
-        previousState[channel] = newState;
-
-        // Determine active level based on configuration.
-        const bool isActive = activeLow ? (newState == 0) : (newState == 1);
-        if (isActive) {
-            pressedState[channel] = 1;
-        }
-    }
+    // No longer used — debounce logic is in update() and readPort().
 }
 
 void DebounceMCP::setActiveLow(bool enabled) {

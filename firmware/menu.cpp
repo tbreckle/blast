@@ -151,25 +151,41 @@ void displayServiceMenu() {
     display.println("SERVICE MENU");
     display.setTextColor(SSD1306_WHITE);
 
+    if (currentProfile.serviceP1.key == 0 && currentProfile.serviceP2.key == 0 && currentProfile.testP1.key == 0 &&
+        currentProfile.testP2.key == 0) {
+        display.setCursor(4, 20);
+        display.println("No configuration.");
+        display.display();
+        return;
+    }
+
     // Center point for the display.
     uint8_t centerX = SCREEN_WIDTH / 2;
     uint8_t centerY = SCREEN_HEIGHT / 2 + 5;
 
-    // North - Service P2.
-    display.setCursor(centerX - 30, 15);
-    display.println("Service P2");
+    if (currentProfile.serviceP2.key != 0) {
+        // North - Service P2.
+        display.setCursor(centerX - 30, 15);
+        display.println("Service P2");
+    }
 
-    // East - Test P1.
-    display.setCursor(centerX + 20, centerY - 4);
-    display.println("Test P1");
+    if (currentProfile.testP1.key != 0) {
+        // East - Test P1.
+        display.setCursor(centerX + 20, centerY - 4);
+        display.println("Test P1");
+    }
 
-    // South - Service P1.
-    display.setCursor(centerX - 30, SCREEN_HEIGHT - 10);
-    display.println("Service P1");
+    if (currentProfile.serviceP1.key != 0) {
+        // South - Service P1.
+        display.setCursor(centerX - 30, SCREEN_HEIGHT - 10);
+        display.println("Service P1");
+    }
 
-    // West - Test P2.
-    display.setCursor(5, centerY - 4);
-    display.println("Test P2");
+    if (currentProfile.testP2.key != 0) {
+        // West - Test P2.
+        display.setCursor(5, centerY - 4);
+        display.println("Test P2");
+    }
 
     display.display();
 }
