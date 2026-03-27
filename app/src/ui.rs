@@ -165,6 +165,12 @@ impl BlastApp {
                     .open()
                     .map_err(|e| format!("Failed to open port: {}", e))?;
 
+                // Flush stale data and give device time to stabilize after port open.
+                // On Windows, opening a COM port asserts DTR which resets Arduino/Pico devices.
+                let _ = port.clear(serialport::ClearBuffer::All);
+                thread::sleep(Duration::from_millis(500));
+                let _ = port.clear(serialport::ClearBuffer::Input);
+
                 let mut conn = FirmwareConnection::new(port);
 
                 let version = conn.get_version()
@@ -595,11 +601,11 @@ impl BlastApp {
                                 for port in &self.serial_ports {
                                     let label = match &port.port_type {
                                         SerialPortType::UsbPort(info) => {
-                                            format!(
-                                                "{} ({})",
-                                                port.port_name,
-                                                info.product.as_deref().unwrap_or("Unknown")
-                                            )
+                                            let name = info.product.as_deref()
+                                                .or(info.manufacturer.as_deref())
+                                                .map(|s| s.to_string())
+                                                .unwrap_or_else(|| format!("VID:{:04X} PID:{:04X}", info.vid, info.pid));
+                                            format!("{} ({})", port.port_name, name)
                                         }
                                         _ => port.port_name.clone(),
                                     };

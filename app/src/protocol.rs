@@ -169,8 +169,10 @@ impl FirmwareConnection {
                     Err(slip::SlipError::IncompleteFrame) => {
                         // Need more data, continue reading
                     }
-                    Err(e) => {
-                        anyhow::bail!("SLIP decode error: {}", e);
+                    Err(slip::SlipError::InvalidFrame) => {
+                        // Garbage data (e.g. from device reset on port open), discard and retry
+                        println!("[RX] Invalid SLIP frame, discarding buffer and retrying...");
+                        self.recv_buffer.clear();
                     }
                 }
             }
