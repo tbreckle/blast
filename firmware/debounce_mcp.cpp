@@ -86,6 +86,11 @@ bool DebounceMCP::channelPressed(uint8_t channel) {
     return wasPressed;
 }
 
+bool DebounceMCP::channelHeld(uint8_t channel) {
+    if (channel >= MCP_23017_CHANNELS) return false;
+    return activeLow ? (debouncedState[channel] == 0) : (debouncedState[channel] == 1);
+}
+
 void DebounceMCP::setDebounceDelay(unsigned long delay) {
     debounceDelay = delay;
 }

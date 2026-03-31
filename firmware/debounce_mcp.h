@@ -52,6 +52,13 @@ class DebounceMCP {
         bool channelPressed(uint8_t channel);
 
         /**
+         * Check if a specific channel is currently held (debounced state).
+         * @param channel Channel number (0-15 for 16-channel expander).
+         * @return true if the channel is currently in the active/pressed state.
+         */
+        bool channelHeld(uint8_t channel);
+
+        /**
          * Set debounce delay.
          * @param delay Delay in milliseconds.
          */

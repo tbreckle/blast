@@ -24,7 +24,8 @@ extern bool redrawDisplay;
 extern uint32_t splashStartTime;
 
 // Forward declaration for handleButtonPress (defined in main file).
-void handleButtonPress(KeyCombo* key);
+// channel: MCP channel (0-15) for hold tracking; 255 = no channel (fixed minimum-duration press).
+void handleButtonPress(KeyCombo* key, uint8_t channel = 255);
 
 // Function declarations.
 void displayProfileSelect();

@@ -29,8 +29,12 @@ MenuState oldMenuState{STATE_NONE};
 uint8_t selectedProfileIndex{0};
 uint8_t selectedProfileMenuItem{0};
 uint32_t splashStartTime{0};
-uint32_t keyPressTime{0};
-bool keyPressed{false};
+struct KeyPressState {
+    bool active;
+    uint32_t pressTime;
+    KeyCombo key;
+};
+KeyPressState keyPressStates[MCP_23017_CHANNELS]{};
 uint8_t currentProfileIndex{0};
 ButtonMapping currentProfile;
 bool redrawDisplay{true};
@@ -499,7 +503,7 @@ void handleMenuStateTransitions() {
     }
 }
 
-void handleButtonPress(KeyCombo* key) {
+void handleButtonPress(KeyCombo* key, uint8_t channel) {
     /**
      * Handle a single button press by sending the corresponding key combo.
      *
@@ -563,9 +567,26 @@ void handleButtonPress(KeyCombo* key) {
         }
     }
 
-    // Start non-blocking timer for key release.
-    keyPressTime = millis();
-    keyPressed = true;
+    // Record per-channel state for independent release tracking.
+    keyPressStates[channel].active = true;
+    keyPressStates[channel].pressTime = millis();
+    keyPressStates[channel].key = *key;
+}
+
+void handleButtonRelease(const KeyCombo* key) {
+    if (key->modifiers & MOD_ESC) {
+        Keyboard.release(KEY_ESC);
+    } else {
+        if (key->modifiers & MOD_CTRL) Keyboard.release(KEY_LEFT_CTRL);
+        if (key->modifiers & MOD_ALT) Keyboard.release(KEY_LEFT_ALT);
+        if (key->modifiers & MOD_SHIFT) Keyboard.release(KEY_LEFT_SHIFT);
+        if (key->modifiers & MOD_F) {
+            uint8_t fKey = key->key;
+            if (fKey >= 1 && fKey <= 24) Keyboard.release(KEY_F1 + (fKey - 1));
+        } else {
+            Keyboard.release(key->key);
+        }
+    }
 }
 
 void handleButtons() {
@@ -576,37 +597,37 @@ void handleButtons() {
      *
      */
     if (debounceMcp.channelPressed(MCP_PIN_START_P1 - 1)) {
-        handleButtonPress(&currentProfile.startP1);
+        handleButtonPress(&currentProfile.startP1, MCP_PIN_START_P1 - 1);
     }
     if (debounceMcp.channelPressed(MCP_PIN_START_P2 - 1)) {
-        handleButtonPress(&currentProfile.startP2);
+        handleButtonPress(&currentProfile.startP2, MCP_PIN_START_P2 - 1);
     }
     if (debounceMcp.channelPressed(MCP_PIN_COIN_P1 - 1)) {
-        handleButtonPress(&currentProfile.coinP1);
+        handleButtonPress(&currentProfile.coinP1, MCP_PIN_COIN_P1 - 1);
     }
     if (debounceMcp.channelPressed(MCP_PIN_COIN_P2 - 1)) {
-        handleButtonPress(&currentProfile.coinP2);
+        handleButtonPress(&currentProfile.coinP2, MCP_PIN_COIN_P2 - 1);
     }
     if (debounceMcp.channelPressed(MCP_PIN_ACTION_P1_1 - 1)) {
-        handleButtonPress(&currentProfile.actionP1_1);
+        handleButtonPress(&currentProfile.actionP1_1, MCP_PIN_ACTION_P1_1 - 1);
     }
     if (debounceMcp.channelPressed(MCP_PIN_ACTION_P1_2 - 1)) {
-        handleButtonPress(&currentProfile.actionP1_2);
+        handleButtonPress(&currentProfile.actionP1_2, MCP_PIN_ACTION_P1_2 - 1);
     }
     if (debounceMcp.channelPressed(MCP_PIN_ACTION_P2_1 - 1)) {
-        handleButtonPress(&currentProfile.actionP2_1);
+        handleButtonPress(&currentProfile.actionP2_1, MCP_PIN_ACTION_P2_1 - 1);
     }
     if (debounceMcp.channelPressed(MCP_PIN_ACTION_P2_2 - 1)) {
-        handleButtonPress(&currentProfile.actionP2_2);
+        handleButtonPress(&currentProfile.actionP2_2, MCP_PIN_ACTION_P2_2 - 1);
     }
     if (debounceMcp.channelPressed(MCP_PIN_PAUSE - 1)) {
-        handleButtonPress(&currentProfile.pause);
+        handleButtonPress(&currentProfile.pause, MCP_PIN_PAUSE - 1);
     }
     if (debounceMcp.channelPressed(MCP_PIN_LOAD - 1)) {
-        handleButtonPress(&currentProfile.load);
+        handleButtonPress(&currentProfile.load, MCP_PIN_LOAD - 1);
     }
     if (debounceMcp.channelPressed(MCP_PIN_SAVE - 1)) {
-        handleButtonPress(&currentProfile.save);
+        handleButtonPress(&currentProfile.save, MCP_PIN_SAVE - 1);
     }
 }
 
@@ -811,14 +832,21 @@ void loop() {
     // Update display.
     updateDisplay();
 
-    // Handle key release after non-blocking delay.
-    if (keyPressed && (millis() - keyPressTime >= globalSettings.keyPressDurationMs)) {
-        Keyboard.releaseAll();
-        keyPressed = false;
+    // Per-channel key release: each button is tracked independently.
+    // A key is released when its button is physically released and the minimum press time has elapsed.
+    for (uint8_t ch = 0; ch < MCP_23017_CHANNELS; ch++) {
+        if (keyPressStates[ch].active) {
+            bool minTimeElapsed = (millis() - keyPressStates[ch].pressTime >= globalSettings.keyPressDurationMs);
+            bool buttonReleased = !debounceMcp.channelHeld(ch);
+            if (minTimeElapsed && buttonReleased) {
+                handleButtonRelease(&keyPressStates[ch].key);
+                keyPressStates[ch].active = false;
+            }
+        }
     }
 
     // Check for button press events (only in profile mode, not during menu).
-    if ((currentMenuState == STATE_PROFILE || currentMenuState == STATE_SERVICEMENU) && !keyPressed) {
+    if (currentMenuState == STATE_PROFILE || currentMenuState == STATE_SERVICEMENU) {
         handleButtons();
     }
 
