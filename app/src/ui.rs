@@ -335,8 +335,7 @@ impl BlastApp {
                         }
                         SyncResult::Rebooted => {
                             self.disconnect();
-                            self.error_message =
-                                Some("Device reboot command sent.".to_string());
+                            self.error_message = Some("Device reboot command sent.".to_string());
                         }
                         SyncResult::Error {
                             connection,
@@ -354,8 +353,7 @@ impl BlastApp {
                     // Thread dropped sender without sending (e.g. panic).
                     self.pending_result = None;
                     self.is_syncing = false;
-                    self.error_message =
-                        Some("Operation failed unexpectedly.".to_string());
+                    self.error_message = Some("Operation failed unexpectedly.".to_string());
                 }
             }
         }
@@ -601,10 +599,17 @@ impl BlastApp {
                                 for port in &self.serial_ports {
                                     let label = match &port.port_type {
                                         SerialPortType::UsbPort(info) => {
-                                            let name = info.product.as_deref()
+                                            let name = info
+                                                .product
+                                                .as_deref()
                                                 .or(info.manufacturer.as_deref())
                                                 .map(|s| s.to_string())
-                                                .unwrap_or_else(|| format!("VID:{:04X} PID:{:04X}", info.vid, info.pid));
+                                                .unwrap_or_else(|| {
+                                                    format!(
+                                                        "VID:{:04X} PID:{:04X}",
+                                                        info.vid, info.pid
+                                                    )
+                                                });
                                             format!("{} ({})", port.port_name, name)
                                         }
                                         _ => port.port_name.clone(),
@@ -820,16 +825,10 @@ impl BlastApp {
                 .order(egui::Order::Foreground)
                 .fixed_pos(screen_rect.min)
                 .show(ctx, |ui| {
-                    let response = ui.allocate_response(
-                        screen_rect.size(),
-                        egui::Sense::click_and_drag(),
-                    );
+                    let response =
+                        ui.allocate_response(screen_rect.size(), egui::Sense::click_and_drag());
                     let painter = ui.painter();
-                    painter.rect_filled(
-                        response.rect,
-                        0.0,
-                        egui::Color32::from_black_alpha(180),
-                    );
+                    painter.rect_filled(response.rect, 0.0, egui::Color32::from_black_alpha(180));
                 });
 
             // Centered message and spinner on top.
