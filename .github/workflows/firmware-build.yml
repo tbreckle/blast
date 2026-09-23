@@ -43,16 +43,20 @@ jobs:
           # Update indexes
           arduino-cli core update-index
 
-          # Install RP2040 core
-          arduino-cli core install rp2040:rp2040
+          # Install RP2040 core (version must match README.md).
+          arduino-cli core install rp2040:rp2040@6.1.1
 
       - name: Install Required Libraries
         run: |
           arduino-cli lib update-index
-          arduino-cli lib install "Adafruit BusIO"
-          arduino-cli lib install "Adafruit GFX Library"
-          arduino-cli lib install "Adafruit SSD1306"
-          arduino-cli lib install "Adafruit MCP23017 Arduino Library"
+          # Versions must match the library table in README.md.
+          # --no-deps: otherwise dependencies are installed in their latest versions.
+          arduino-cli lib install --no-deps \
+            "Adafruit BusIO@1.17.4" \
+            "Adafruit GFX Library@1.12.4" \
+            "Adafruit SSD1306@2.5.16" \
+            "Adafruit MCP23017 Arduino Library@2.3.2"
+          arduino-cli lib list
 
       - name: Build Firmware
         run: |
