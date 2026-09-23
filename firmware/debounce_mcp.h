@@ -113,13 +113,6 @@ class DebounceMCP {
          */
         void readPort(uint8_t port);
 
-        /**
-         * Process channel state change
-         * @param channel Channel number
-         * @param newState New state of the channel
-         */
-        void processChannel(uint8_t channel, uint8_t newState);
-
         // No direct pin reading; interrupts are handled externally.
 };
 

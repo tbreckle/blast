@@ -5,72 +5,102 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 B.L.A.S.T. (Button Logic & Arcade Simulation Terminal) is a configurable arcade controller with two main components:
-- **Firmware** (`firmware/`) — C++/Arduino running on RP2040/RP2350 (Raspberry Pi Pico)
-- **App** (`app/`) — Rust/egui desktop configuration tool (Linux, Windows, macOS)
-- **PCB** (`pcb/`) — KiCAD hardware design files
+- **Firmware** (`firmware/`): C++/Arduino running on RP2040/RP2350 (Raspberry Pi Pico), Arduino-Pico core 6.1.1
+- **App** (`app/`): Rust/egui desktop configuration tool (Linux, Windows, macOS)
+- **PCB** (`pcb/`): KiCAD hardware design files
 
-The firmware and app communicate over USB CDC serial (115200 baud) using a SLIP-framed binary protocol with CRC-16-CCITT checksums.
+`app/CLAUDE.md` and `firmware/CLAUDE.md` hold the per-component file maps, dependencies and pin conventions.
 
 ## Build Commands
 
-### App (Rust)
+### App (Rust), run from `app/`
 ```bash
-cd app
-cargo build              # debug build
-cargo build --release    # release build (LTO, size-optimized, stripped)
-cargo test               # run tests
-cargo clippy             # lint (warnings are CI failures)
-cargo fmt --check        # check formatting
-cargo fmt                # auto-format
+cargo build                  # debug build
+cargo build --release        # release build (LTO, opt-level "z", panic=abort, stripped)
+cargo test                   # run tests (currently only slip.rs has unit tests)
+cargo test slip::tests::<name>   # run a single test
+cargo clippy                 # lint (warnings are CI failures)
+cargo fmt --check            # CI formatting check
 ```
+On Linux the `serialport` crate needs `libudev-dev` and `pkg-config`.
 
-### Firmware (Arduino)
+### Firmware (Arduino CLI), run from the repo root
 ```bash
-# Build with Arduino CLI (board: rp2040:rp2040)
-# Output goes to _build/
-# Flash via firmware/flash.sh (uses picotool with bootloader reset)
+# Local board config lives in .vscode/arduino.json (rpipicow, usbstack=picosdk, output to _build/)
+arduino-cli compile --fqbn rp2040:rp2040:rpipicow --output-dir _build firmware/firmware.ino
+# CI compiles with --fqbn rp2040:rp2040:generic
+
+# Lint the same way CI does
+cppcheck --enable=all --error-exitcode=1 --suppress=missingIncludeSystem --suppress=unusedFunction firmware/
+
+# Flash: run from firmware/ (the default UF2 path is ../_build/firmware.ino.uf2).
+# Uses a 1200-baud touch to enter the bootloader, then picotool load and picotool reboot.
+cd firmware && ./flash.sh [-p /dev/ttyACMx] [path/to/firmware.uf2]   # auto-detects port by VID/PID f144:0001
 ```
 
 ## Architecture
 
-### Communication Protocol
-Both sides implement the same SLIP-based serial protocol:
-- **App side:** `app/src/protocol.rs` (commands/responses) + `app/src/slip.rs` (framing)
-- **Firmware side:** `firmware/serializer.cpp/h` (commands/responses + SLIP framing)
-- Frame format: `[SLIP_END] [CMD] [LEN_L] [LEN_H] [PAYLOAD] [CRC_L] [CRC_H] [SLIP_END]`
-- C structs use `#[repr(C, packed)]` on the Rust side for binary compatibility
+### Two serial protocols on one USB CDC port
+The firmware's `Serial` (USB CDC, 115200 baud) runs in one of two modes, held in the global `serialProtocolMode` (`firmware.ino`). `loop()` sends incoming bytes to one of two parsers depending on the mode:
 
-### Firmware Hardware Interfaces
-- **MCP23017** (I2C 0x20): 16-channel GPIO expander for buttons, interrupt-driven + polling fallback
-- **SSD1306** (I2C 0x3C): 128x64 OLED display with menu state machine
-- **USB HID**: Keyboard emulation for button-to-key mapping
-- **PWM LEDs**: 4 modes (OFF, ON, BREATHING, BLINKING)
+1. **BLAST text protocol** (`PROTOCOL_BLAST`, the default at boot): `firmware/blast_protocol.cpp`, specified in `firmware/BLAST_PROTOCOL.md`. It reads newline-terminated ASCII lines such as `B{cmd}x{player}x{value}[x{extra}]`. This is the host/game-facing interface for LED control:
+   - `B1`/`B2`: host startup/shutdown
+   - `B3`–`B6`: start/coin/action A/action B LEDs per player (player `0` = both)
+   - `B7`: pause/save/load LEDs as a group
+   - `B+`: switch to SLIP mode
+
+   The "flash" LED effect is a timed on/off sequence driven by `updateBlastFlash()`, not one of the base LED modes.
+2. **SLIP binary protocol** (`PROTOCOL_SLIP`): the config app's protocol.
+   - App side: `app/src/protocol.rs` + `app/src/slip.rs`
+   - Firmware side: `firmware/serializer.cpp/h`
+   - Frame format: `[SLIP_END] [CMD] [LEN_L] [LEN_H] [PAYLOAD] [CRC_L] [CRC_H] [SLIP_END]`, CRC-16-CCITT
+   - The app first sends `B+\n` to leave BLAST mode. `CMD_SWITCH_BLAST` (0x0A) switches back.
+
+The OLED shows the active mode as "B" or "S" (controlled by `SHOW_PROTOCOL_MODE_INDICATOR`).
+
+**Keep both sides in sync:**
+- Command and error IDs are defined twice: `#define CMD_*`/`ERR_*` in `serializer.h` and `pub const CMD_*` in `protocol.rs`.
+- Profile/settings structs are C structs in the firmware and `#[repr(C, packed)]` in `app/src/types.rs`. They are sent as raw bytes, so any field change has to be mirrored exactly on both sides.
+- `SET_PROFILE` only updates RAM. `SAVE_PROFILE` persists to EEPROM (flash-emulated, `storage.cpp`, up to `MAX_PROFILES` slots of `sizeof(ButtonMapping)`).
+- Changing the `ButtonMapping` layout also changes the EEPROM layout. Bump `STORAGE_VERSION` in `storage.h` and extend `migrateStorage()` so profiles on existing devices survive. The size test in `app/src/types.rs` guards the app side.
+
+### Firmware hardware interfaces
+- **MCP23017** (I2C 0x20): 16 button inputs, interrupt-driven with a polling fallback (`debounce_mcp.cpp`). Buttons are active-low.
+- **TLC59711** (bit-banged SPI, CLK GP6 / DOUT GP7): 12-channel LED driver.
+  - `tlcSetLed()` applies gamma correction and marks a dirty buffer; `tlcUpdate()` pushes it to the chip.
+  - `ledSetMode()` implements the OFF/ON/BREATHING/BLINKING modes on top.
+- **SSD1306** (I2C 0x3C): 128x64 OLED with a menu state machine (`menu.cpp`). Call `requestRedraw()` after any state change the display should show.
+- **USB HID** keyboard emulation. `setup()` renames the USB device (product "B.L.A.S.T.", custom VID/PID).
+
+### Index conventions (easy to get wrong)
+- MCP pin constants are 1-indexed; debouncer channels are 0-indexed (`channel = MCP_PIN - 1`).
+- TLC LED pin constants (`TLC_PIN_*` in `firmware.ino`) are also 1-indexed; `ledSetMode()` takes `pin - 1`.
+- `blast_protocol.cpp` keeps its own copy of the TLC pin map (`TLC_*`), which must match the `TLC_PIN_*` constants in `firmware.ino`.
 
 ### App GUI
-Immediate-mode GUI (egui/eframe). Long-running serial operations run on background threads with an overlay spinner. Theme and settings persisted via confy.
-
-### Key Convention
-MCP pin constants are 1-indexed (`MCP_PIN_START_P1 = 9`), but the debouncer uses 0-indexed channels (`channel = MCP_PIN - 1`). Buttons are active-low (pull-up, grounded when pressed).
+Immediate-mode GUI (egui/eframe), almost entirely in `ui.rs`. Long-running serial operations run on background threads while an overlay spinner is shown. Theme and settings are persisted via confy.
 
 ## Development Workflow
 
-Uses **GitFlow**: features branch from `develop`, releases merge to `main` then back to `develop`. PRs required for `main` and `develop` (1 review, CI must pass). See `GITFLOW.md` for details.
+Uses **GitFlow**: features branch from `develop`; releases merge to `main` and then back to `develop`. PRs to `main` and `develop` need 1 review and passing CI. See `GITFLOW.md` and `.github/WORKFLOWS.md`.
 
 Branch naming: `feature/*`, `bugfix/*`, `release/*`, `hotfix/*`
 
 ## CI/CD
 
-- **app-build.yml**: Builds on Linux/Windows/macOS, runs clippy + fmt check
-- **firmware-build.yml**: Arduino CLI compile + cppcheck linting
-- **release.yml**: Manual dispatch, creates release branch with version bumps
-- **tag-release.yml**: Auto-tags on release merge to main, creates GitHub Release
+- **app-build.yml**: build + test (release) on Linux/Windows/macOS, clippy, fmt check. Triggered by changes under `app/`.
+- **firmware-build.yml**: Arduino CLI compile (produces the UF2 artifact) + cppcheck. Triggered by changes under `firmware/` or `pcb/`.
+- **release.yml**: manual dispatch; creates a release branch with version bumps.
+- **tag-release.yml**: tags automatically when a release merges to `main` and creates the GitHub Release.
 
 ## Rust Code Standards
 
-- No `unwrap()` without justification — use `Result<T, E>` with anyhow/thiserror
-- Clippy warnings are build failures in CI
-- Release profile: LTO enabled, `opt-level = "z"`, panic=abort, symbols stripped
+- No `unwrap()` without justification; use `Result<T, E>` with anyhow/thiserror.
+- `unsafe` byte transmutes of packed structs in `protocol.rs` carry `// SAFETY:` comments; keep that pattern.
 
 ## Firmware Debug
 
-Enable flags in `firmware/_debug.h`: `DEBUG` (serial output on GP8/GP9), `DEBUG_SLIP` (protocol tracing), `DEBUG_LOOPTIME` (loop cycle stats). Debug serial on Serial2 at 115200 baud.
+Enable flags in `firmware/_debug.h`:
+- `DEBUG`: debug output on Serial2 (GP8/GP9, 115200 baud). Debug prints are wrapped in `#ifdef DEBUG`.
+- `DEBUG_SLIP`: protocol tracing.
+- `DEBUG_LOOPTIME`: loop cycle stats.

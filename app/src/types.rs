@@ -90,7 +90,10 @@ pub const MOD_SHIFT: u8 = 0x4;
 pub const MOD_F: u8 = 0x8;
 pub const MOD_ESC: u8 = 0x10;
 
-/// ButtonMapping structure matching firmware (41 bytes total)
+/// Size of the game name field including the null terminator.
+pub const GAME_NAME_SIZE: usize = 30;
+
+/// ButtonMapping structure matching firmware (79 bytes total)
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default)]
 pub struct ButtonMapping {
@@ -111,12 +114,33 @@ pub struct ButtonMapping {
     pub save: KeyCombo,
     pub load: KeyCombo,
     pub exit: KeyCombo,
+    pub game_name: [u8; GAME_NAME_SIZE], // MAMEHooker game name, max 29 chars + null terminator
 }
 
 impl ButtonMapping {
     pub fn name_str(&self) -> String {
         let null_pos = self.name.iter().position(|&c| c == 0).unwrap_or(8);
         String::from_utf8_lossy(&self.name[..null_pos]).to_string()
+    }
+
+    pub fn game_name_str(&self) -> String {
+        let game_name = self.game_name;
+        let null_pos = game_name
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(GAME_NAME_SIZE);
+        String::from_utf8_lossy(&game_name[..null_pos]).to_string()
+    }
+
+    /// Set the game name, truncated to GAME_NAME_SIZE - 1 bytes (on a char boundary).
+    pub fn set_game_name(&mut self, game_name: &str) {
+        let mut len = game_name.len().min(GAME_NAME_SIZE - 1);
+        while !game_name.is_char_boundary(len) {
+            len -= 1;
+        }
+        let mut buf = [0u8; GAME_NAME_SIZE];
+        buf[..len].copy_from_slice(&game_name.as_bytes()[..len]);
+        self.game_name = buf;
     }
 }
 
@@ -150,6 +174,7 @@ impl fmt::Debug for ButtonMapping {
             .field("name", &self.name_str())
             .field("start_p1", &self.start_p1)
             .field("start_p2", &self.start_p2)
+            .field("game_name", &self.game_name_str())
             .finish()
     }
 }
@@ -165,5 +190,38 @@ pub struct FirmwareVersion {
 impl fmt::Display for FirmwareVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn button_mapping_matches_firmware_size() {
+        assert_eq!(std::mem::size_of::<ButtonMapping>(), 79);
+    }
+
+    #[test]
+    fn game_name_roundtrip() {
+        let mut profile = ButtonMapping::default();
+        assert_eq!(profile.game_name_str(), "");
+        profile.set_game_name("sf2");
+        assert_eq!(profile.game_name_str(), "sf2");
+        profile.set_game_name("x");
+        assert_eq!(profile.game_name_str(), "x");
+    }
+
+    #[test]
+    fn game_name_is_truncated_and_null_terminated() {
+        let mut profile = ButtonMapping::default();
+        profile.set_game_name(&"a".repeat(40));
+        assert_eq!(profile.game_name_str(), "a".repeat(GAME_NAME_SIZE - 1));
+        let game_name = profile.game_name;
+        assert_eq!(game_name[GAME_NAME_SIZE - 1], 0);
+
+        // Multi-byte char crossing the limit is dropped entirely.
+        profile.set_game_name(&format!("{}ä", "a".repeat(GAME_NAME_SIZE - 2)));
+        assert_eq!(profile.game_name_str(), "a".repeat(GAME_NAME_SIZE - 2));
     }
 }

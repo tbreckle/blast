@@ -287,9 +287,7 @@ void handleMenuNavigation(bool up, bool right, bool down, bool left, bool enter)
                 requestRedraw();
             }
         } else if (enter) {
-            selectedProfileMenuItem = 0;
-            loadProfile(selectedProfileIndex, &currentProfile);
-            setMenuState(STATE_PROFILE);
+            activateProfile(selectedProfileIndex);
         }
     } else if (currentMenuState == STATE_PROFILE) {
         if (up) {

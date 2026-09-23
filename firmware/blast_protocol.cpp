@@ -1,6 +1,7 @@
 #include "blast_protocol.h"
 
 #include "menu.h"
+#include "storage.h"
 
 // LED control function (defined in firmware.ino).
 extern void ledSetMode(uint8_t channel, LedMode mode, uint16_t brightness, uint16_t period,
@@ -25,6 +26,12 @@ static const uint16_t DEFAULT_BLINK_DURATION_MS = 500;
 static const uint8_t DEFAULT_FLASH_COUNT = 3;
 static const uint16_t DEFAULT_BREATH_DURATION_MS = 1000;
 static const uint16_t FLASH_HALF_PERIOD_MS = 150;
+
+// Upper limits for EXTRA values.
+// Blink/breath period is 2 * duration and must fit into uint16_t.
+static const uint16_t MAX_DURATION_MS = 32767;
+// Flash toggles (count * 2) must fit into FlashState::remaining (uint8_t).
+static const uint8_t MAX_FLASH_COUNT = 127;
 
 // TLC LED pin values (1-indexed, matching firmware.ino constants).
 // Channel passed to ledSetMode is pin - 1.
@@ -57,6 +64,14 @@ static int8_t getButtonChannel(uint8_t command, uint8_t player) {
     }
 }
 
+// Return the blink/breath duration for EXTRA: default if omitted or 0, capped at MAX_DURATION_MS.
+static uint16_t getDuration(uint16_t extra, bool hasExtra, uint16_t defaultDuration) {
+    if (!hasExtra || extra == 0) {
+        return defaultDuration;
+    }
+    return (extra > MAX_DURATION_MS) ? MAX_DURATION_MS : extra;
+}
+
 // Apply an LED command to a single TLC channel.
 static void applyLedCommand(uint8_t channel, uint8_t value, uint16_t extra, bool hasExtra) {
     // Cancel any active flash on this channel.
@@ -74,13 +89,16 @@ static void applyLedCommand(uint8_t channel, uint8_t value, uint16_t extra, bool
             break;
 
         case BLAST_LED_BLINK: {
-            uint16_t duration = hasExtra ? extra : DEFAULT_BLINK_DURATION_MS;
+            uint16_t duration = getDuration(extra, hasExtra, DEFAULT_BLINK_DURATION_MS);
             ledSetMode(channel, LED_BLINKING, 4095, duration * 2, 0);
             break;
         }
 
         case BLAST_LED_FLASH: {
-            uint8_t count = hasExtra ? (uint8_t)extra : DEFAULT_FLASH_COUNT;
+            uint8_t count = DEFAULT_FLASH_COUNT;
+            if (hasExtra) {
+                count = (extra > MAX_FLASH_COUNT) ? MAX_FLASH_COUNT : (uint8_t)extra;
+            }
             if (count == 0) {
                 ledSetMode(channel, LED_OFF, 0, 0, 0);
                 break;
@@ -96,7 +114,7 @@ static void applyLedCommand(uint8_t channel, uint8_t value, uint16_t extra, bool
         }
 
         case BLAST_LED_BREATH: {
-            uint16_t duration = hasExtra ? extra : DEFAULT_BREATH_DURATION_MS;
+            uint16_t duration = getDuration(extra, hasExtra, DEFAULT_BREATH_DURATION_MS);
             ledSetMode(channel, LED_BREATHING, 4095, duration * 2, 0);
             break;
         }
@@ -110,8 +128,16 @@ static void applyLedCommand(uint8_t channel, uint8_t value, uint16_t extra, bool
     }
 }
 
+// Turn off all TLC channels and cancel any active flash sequences.
+static void turnOffAllLeds() {
+    for (uint8_t i = 0; i < 12; i++) {
+        flashStates[i].active = false;
+        ledSetMode(i, LED_OFF, 0, 0, 0);
+    }
+}
+
 // Parse numeric fields separated by 'x' starting from startPos.
-// Fills fields array, returns number of fields parsed.
+// Fills fields array (values saturate at 65535), returns number of fields parsed.
 static uint8_t parseFields(const char* line, uint8_t startPos, uint16_t* fields, uint8_t maxFields) {
     uint8_t count = 0;
     uint8_t pos = startPos;
@@ -119,7 +145,8 @@ static uint8_t parseFields(const char* line, uint8_t startPos, uint16_t* fields,
     while (line[pos] != '\0' && count < maxFields) {
         if (line[pos] == 'x' || line[pos] == 'X') {
             pos++;
-            fields[count++] = (uint16_t)atoi(&line[pos]);
+            unsigned long number = strtoul(&line[pos], nullptr, 10);
+            fields[count++] = (number > 0xFFFF) ? 0xFFFF : (uint16_t)number;
             // Skip past the number digits.
             while (line[pos] >= '0' && line[pos] <= '9') pos++;
         } else {
@@ -215,6 +242,40 @@ static void handleGroupLedCommand(const char* line) {
 #endif
 }
 
+// Handle BL: switch to the profile whose gameName matches.
+static void handleGameNameCommand(const char* line) {
+    // Format: BLx{GAMENAME}
+    if (line[2] != 'x' && line[2] != 'X') {
+#ifdef DEBUG
+        Serial2.println("[BLAST] Invalid BL command: missing game name.");
+#endif
+        return;
+    }
+
+    const char* gameName = &line[3];
+    int16_t profileIndex = findProfileByGameName(gameName);
+    if (profileIndex < 0) {
+#ifdef DEBUG
+        Serial2.print("[BLAST] No profile for game: ");
+        Serial2.println(gameName);
+#endif
+        return;
+    }
+
+    // Keep the current state (and LEDs) if the profile is already active.
+    if (currentMenuState == STATE_PROFILE && currentProfileIndex == profileIndex) {
+        return;
+    }
+
+#ifdef DEBUG
+    Serial2.print("[BLAST] Game ");
+    Serial2.print(gameName);
+    Serial2.print(" → profile ");
+    Serial2.println(profileIndex);
+#endif
+    activateProfile((uint8_t)profileIndex);
+}
+
 // Process a complete BLAST protocol line.
 static void processBlastLine(const char* line) {
     if (line[0] != 'B') return;
@@ -224,12 +285,14 @@ static void processBlastLine(const char* line) {
 #ifdef DEBUG
             Serial2.println("[BLAST] Host connected.");
 #endif
+            turnOffAllLeds();
             break;
 
         case '2':  // B2 - Shutdown
 #ifdef DEBUG
             Serial2.println("[BLAST] Host disconnected.");
 #endif
+            turnOffAllLeds();
             break;
 
         case '3':  // B3 - Start button LED
@@ -241,6 +304,10 @@ static void processBlastLine(const char* line) {
 
         case '7':  // B7 - Load, Pause, Save button LEDs
             handleGroupLedCommand(line);
+            break;
+
+        case 'L':  // BL - Switch profile by game name
+            handleGameNameCommand(line);
             break;
 
         case '+':  // B+ - Switch to SLIP mode

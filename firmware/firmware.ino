@@ -500,6 +500,25 @@ void handleMenuStateTransitions() {
     }
 }
 
+void activateProfile(uint8_t index) {
+    /**
+     * Load a profile from storage and make it the active profile.
+     *
+     * @param index Profile slot index (0 to MAX_PROFILES-1).
+     *
+     * Switches to STATE_PROFILE and applies the state transition (LEDs) immediately,
+     * even if already in STATE_PROFILE, so LED commands processed afterwards are not
+     * overwritten by the transition in the next loop cycle.
+     */
+    loadProfile(index, &currentProfile);
+    currentProfileIndex = index;
+    selectedProfileIndex = index;
+    selectedProfileMenuItem = 0;
+    setMenuState(STATE_PROFILE);
+    oldMenuState = STATE_NONE;
+    handleMenuStateTransitions();
+}
+
 void handleButtonPress(KeyCombo* key, uint8_t channel) {
     /**
      * Handle a single button press by sending the corresponding key combo.
@@ -636,6 +655,7 @@ void setup() {
     USB.disconnect();
     USB.setProduct("B.L.A.S.T.");
     USB.setManufacturer("tbreckle");
+    USB.setVIDPID(0xF144, 0x0001);
     USB.connect();
 
     // Serial (aka Serial1) is USB CDC and used for main communication with host.
@@ -669,10 +689,11 @@ void setup() {
 #ifdef DEBUG
     Serial2.println("Initialize EEPROM.");
 #endif
-    EEPROM.begin(4096);
+    EEPROM.begin(EEPROM_SIZE);
     // Initialize storage on first run.
     // Uncomment if required.
     // intializeStorage();
+    migrateStorage();
 
 #ifdef DEBUG
     Serial2.println("Initialize Keyboard.");

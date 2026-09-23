@@ -109,6 +109,8 @@ Communication between firmware and configuration tool uses a custom protocol ove
 
 See `app/src/protocol.rs` for detailed protocol specification.
 
+Host software (e.g. games or output tools) can control the button LEDs through the simple line-based **BLAST protocol** on the same serial port. See [firmware/BLAST_PROTOCOL.md](firmware/BLAST_PROTOCOL.md).
+
 ## Configuration & Profiles
 
 ### Button Mapping

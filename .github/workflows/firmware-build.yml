@@ -25,10 +25,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # Official install script; arduino/setup-arduino-cli has no Node.js 24 release.
       - name: Set up Arduino CLI
-        uses: arduino/setup-arduino-cli@v1
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/.local/bin" sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Add Raspberry Pi RP2040 Core
         run: |
@@ -58,7 +62,7 @@ jobs:
             firmware/firmware.ino
 
       - name: Upload Firmware Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: firmware-uf2
           path: firmware_build/firmware.ino.uf2
@@ -69,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install cppcheck
         run: sudo apt-get install -y cppcheck

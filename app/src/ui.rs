@@ -58,6 +58,9 @@ const FIELD_SAVE: usize = 13;
 const FIELD_LOAD: usize = 14;
 const FIELD_EXIT: usize = 15;
 
+/// Maximum time to wait for a running background operation when the app closes.
+const EXIT_SYNC_TIMEOUT: Duration = Duration::from_secs(10);
+
 enum SyncResult {
     Connected {
         connection: FirmwareConnection,
@@ -314,47 +317,7 @@ impl BlastApp {
     fn poll_pending_result(&mut self) {
         if let Some(rx) = &self.pending_result {
             match rx.try_recv() {
-                Ok(result) => {
-                    self.pending_result = None;
-                    self.is_syncing = false;
-                    match result {
-                        SyncResult::Connected {
-                            connection,
-                            profiles,
-                            version,
-                            port_name,
-                        } => {
-                            self.connection = Some(connection);
-                            self.profiles = profiles;
-                            self.firmware_version = Some(version);
-                            self.selected_port = Some(port_name);
-                            self.is_dirty = false;
-                        }
-                        SyncResult::Reloaded {
-                            connection,
-                            profiles,
-                        } => {
-                            self.connection = Some(connection);
-                            self.profiles = profiles;
-                            self.is_dirty = false;
-                        }
-                        SyncResult::Saved { connection } => {
-                            self.connection = Some(connection);
-                            self.is_dirty = false;
-                        }
-                        SyncResult::Rebooted => {
-                            self.disconnect();
-                            self.error_message = Some("Device reboot command sent.".to_string());
-                        }
-                        SyncResult::Error {
-                            connection,
-                            message,
-                        } => {
-                            self.connection = connection;
-                            self.error_message = Some(message);
-                        }
-                    }
-                }
+                Ok(result) => self.apply_sync_result(result),
                 Err(mpsc::TryRecvError::Empty) => {
                     // Still waiting — nothing to do.
                 }
@@ -364,6 +327,48 @@ impl BlastApp {
                     self.is_syncing = false;
                     self.error_message = Some("Operation failed unexpectedly.".to_string());
                 }
+            }
+        }
+    }
+
+    fn apply_sync_result(&mut self, result: SyncResult) {
+        self.pending_result = None;
+        self.is_syncing = false;
+        match result {
+            SyncResult::Connected {
+                connection,
+                profiles,
+                version,
+                port_name,
+            } => {
+                self.connection = Some(connection);
+                self.profiles = profiles;
+                self.firmware_version = Some(version);
+                self.selected_port = Some(port_name);
+                self.is_dirty = false;
+            }
+            SyncResult::Reloaded {
+                connection,
+                profiles,
+            } => {
+                self.connection = Some(connection);
+                self.profiles = profiles;
+                self.is_dirty = false;
+            }
+            SyncResult::Saved { connection } => {
+                self.connection = Some(connection);
+                self.is_dirty = false;
+            }
+            SyncResult::Rebooted => {
+                self.disconnect();
+                self.error_message = Some("Device reboot command sent.".to_string());
+            }
+            SyncResult::Error {
+                connection,
+                message,
+            } => {
+                self.connection = connection;
+                self.error_message = Some(message);
             }
         }
     }
@@ -429,6 +434,8 @@ impl BlastApp {
                     new_profile.name[i] = byte;
                 }
             }
+            // Game names must be unique, so the copy starts without one.
+            new_profile.set_game_name("");
             // Insert the duplicated profile right after the original
             self.profiles.insert(idx + 1, new_profile);
             self.is_dirty = true;
@@ -463,6 +470,22 @@ impl BlastApp {
         if name_str.is_empty() {
             self.error_message = Some("Profile name cannot be empty".to_string());
             return;
+        }
+
+        // Game names must be unique, otherwise only the first matching profile is reachable.
+        let game_name = self.editor_profile.game_name_str();
+        if !game_name.is_empty() {
+            let duplicate = self.profiles.iter().enumerate().find(|(idx, profile)| {
+                Some(*idx) != self.editing_profile_idx && profile.game_name_str() == game_name
+            });
+            if let Some((_, profile)) = duplicate {
+                self.error_message = Some(format!(
+                    "Game name \"{}\" is already used by profile \"{}\"",
+                    game_name,
+                    profile.name_str()
+                ));
+                return;
+            }
         }
 
         if let Some(idx) = self.editing_profile_idx {
@@ -934,6 +957,22 @@ impl BlastApp {
                             }
                         });
 
+                        // MAMEHooker game name input.
+                        ui.horizontal(|ui| {
+                            ui.label("Game Name:");
+                            let mut game_name_buf = self.editor_profile.game_name_str();
+                            if ui
+                                .text_edit_singleline(&mut game_name_buf)
+                                .on_hover_text(
+                                    "MAMEHooker game name. The controller switches to this \
+                                     profile when it receives BLx<game name>. Max 29 characters.",
+                                )
+                                .changed()
+                            {
+                                self.editor_profile.set_game_name(&game_name_buf);
+                            }
+                        });
+
                         ui.add_space(10.0);
                         ui.separator();
                         ui.add_space(10.0);
@@ -1143,5 +1182,21 @@ impl eframe::App for BlastApp {
         if self.is_syncing {
             ctx.request_repaint();
         }
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // A running background operation owns the connection; wait for it to hand it back.
+        if let Some(rx) = self.pending_result.take() {
+            match rx.recv_timeout(EXIT_SYNC_TIMEOUT) {
+                Ok(result) => self.apply_sync_result(result),
+                Err(e) => eprintln!(
+                    "Warning: Background operation did not finish on exit: {}",
+                    e
+                ),
+            }
+        }
+
+        // Switch the firmware back to BLAST mode and close the serial port.
+        self.disconnect();
     }
 }
