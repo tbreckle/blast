@@ -173,6 +173,9 @@ impl BlastApp {
 
                 let mut conn = FirmwareConnection::new(port);
 
+                conn.enable_slip_mode()
+                    .map_err(|e| format!("Failed to switch to SLIP mode: {}", e))?;
+
                 let version = conn.get_version()
                     .map_err(|e| format!("Failed to read firmware version: {}", e))?;
 
@@ -198,6 +201,12 @@ impl BlastApp {
     }
 
     fn disconnect(&mut self) {
+        // Switch firmware back to BLAST protocol before dropping the connection.
+        if let Some(ref mut conn) = self.connection {
+            if let Err(e) = conn.switch_to_blast() {
+                eprintln!("Warning: Failed to switch back to BLAST mode: {}", e);
+            }
+        }
         self.connection = None;
         self.selected_port = None;
         self.firmware_version = None;

@@ -6,6 +6,7 @@
 #include <splash.h>
 
 #include "_debug.h"
+#include "blast_protocol.h"
 #include "debounce_mcp.h"
 #include "keycodes.h"
 #include "menu.h"
@@ -45,14 +46,6 @@ uint16_t tlcPwmBuffer[12]{0};
 uint16_t tlcPwmDirtyBuffer[12]{0};
 bool tlcDirty{false};
 
-// LED operation modes.
-enum LedMode {
-    LED_OFF = 0,        // LED is off.
-    LED_ON = 1,         // LED is constantly on at set brightness.
-    LED_BREATHING = 2,  // LED fades in/out smoothly.
-    LED_BLINKING = 3    // LED blinks on/off.
-};
-
 // Per-channel LED configuration.
 struct LedChannelConfig {
         LedMode mode;          // Current operation mode.
@@ -69,6 +62,9 @@ FirmwareSettings globalSettings = {
     FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR, FIRMWARE_VERSION_PATCH,
     50  // keyPressDurationMs (default 50ms)
 };
+
+// Serial protocol mode: BLAST at startup, SLIP when app connects via B+.
+SerialProtocolMode serialProtocolMode = PROTOCOL_BLAST;
 
 // Button pin definitions.
 const uint8_t MCP_PIN_START_P1{9};
@@ -856,7 +852,15 @@ void loop() {
         handleButtons();
     }
 
-    processSerialCommand();
+    // Process serial commands based on active protocol mode.
+    if (serialProtocolMode == PROTOCOL_BLAST) {
+        processBlastProtocol();
+    } else {
+        processSerialCommand();
+    }
+
+    // Update flash LED states (BLAST protocol flash command).
+    updateBlastFlash();
 
     // Update LED effects.
     ledUpdate();
