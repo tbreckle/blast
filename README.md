@@ -59,12 +59,22 @@ blast/
 
 **Requirements:**
 - Arduino IDE or PlatformIO
-- RP2040 Arduino core or equivalent
-- Libraries: Adafruit MCP23017, Adafruit SSD1306, HID Keyboard
+- [Arduino-Pico](https://github.com/earlephilhower/arduino-pico) board package by Earle F. Philhower, III — **version 6.1.1** is used
+  (Boards Manager URL: `https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json`)
+- Libraries (install via Library Manager or `arduino-cli lib install "<name>@<version>"`):
+
+  | Library | Version used |
+  |---------|--------------|
+  | Adafruit MCP23017 Arduino Library | 2.3.2 |
+  | Adafruit SSD1306 | 2.5.16 |
+  | Adafruit GFX Library | 1.12.4 |
+  | Adafruit BusIO | 1.17.4 |
+
+  Wire, SPI, EEPROM, Keyboard, HID_Keyboard and tusb-hid are bundled with the Arduino-Pico core.
 
 **Building:**
 1. Open `firmware/firmware.ino` in Arduino IDE
-2. Select RP2040/RP2350 board from Tools menu
+2. Select RP2040/RP2350 board (Arduino-Pico core) from Tools menu
 3. Compile and upload to device
 
 ### Configuration Tool

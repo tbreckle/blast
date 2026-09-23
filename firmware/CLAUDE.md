@@ -6,6 +6,7 @@ Arduino/C++ firmware for RP2040/RP2350-based arcade controller.
 
 - Built with Arduino IDE or arduino-cli
 - Board: RP2040/RP2350 (Raspberry Pi Pico)
+- Board package: Earle Philhower's Arduino-Pico core (`rp2040:rp2040`), version 6.1.1
 - Build output goes to `../_build/`
 - Flash via `flash.sh` (triggers bootloader reset, uses `picotool`)
 

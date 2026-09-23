@@ -2,6 +2,7 @@
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
 #include <Keyboard.h>
+#include <USB.h>
 #include <splash.h>
 
 #include "_debug.h"
@@ -30,9 +31,9 @@ uint8_t selectedProfileIndex{0};
 uint8_t selectedProfileMenuItem{0};
 uint32_t splashStartTime{0};
 struct KeyPressState {
-    bool active;
-    uint32_t pressTime;
-    KeyCombo key;
+        bool active;
+        uint32_t pressTime;
+        KeyCombo key;
 };
 KeyPressState keyPressStates[MCP_23017_CHANNELS]{};
 uint8_t currentProfileIndex{0};
@@ -636,6 +637,11 @@ void setup() {
      * Controller initialization.
      *
      */
+    USB.disconnect();
+    USB.setProduct("B.L.A.S.T.");
+    USB.setManufacturer("tbreckle");
+    USB.connect();
+
     // Serial (aka Serial1) is USB CDC and used for main communication with host.
     Serial.begin(115200);
     // Serial2 is HW UART 1 and used for debug output.
