@@ -1,5 +1,16 @@
 #include "menu.h"
 
+#include "blast_protocol.h"
+
+// Draw protocol mode indicator ("B" or "S") in the top-right corner of the bar.
+#ifdef SHOW_PROTOCOL_MODE_INDICATOR
+static void drawProtocolIndicator() {
+    display.setTextColor(SSD1306_BLACK);
+    display.setCursor(SCREEN_WIDTH - 8, 2);
+    display.print(serialProtocolMode == PROTOCOL_BLAST ? 'B' : 'S');
+}
+#endif
+
 void displayProfileSelect() {
     /**
      * Display the profile selection screen.
@@ -19,6 +30,9 @@ void displayProfileSelect() {
     display.setTextColor(SSD1306_BLACK);
     display.setCursor(2, 2);
     display.println("SELECT PROFILE");
+#ifdef SHOW_PROTOCOL_MODE_INDICATOR
+    drawProtocolIndicator();
+#endif
     display.setTextColor(SSD1306_WHITE);
 
     // Collect all used profiles.
@@ -103,6 +117,9 @@ void displayProfileMenu() {
     display.setTextColor(SSD1306_BLACK);
     display.setCursor(2, 2);
     display.println(currentProfile.name);
+#ifdef SHOW_PROTOCOL_MODE_INDICATOR
+    drawProtocolIndicator();
+#endif
     display.setTextColor(SSD1306_WHITE);
 
     // Menu items.
@@ -149,6 +166,9 @@ void displayServiceMenu() {
     display.setTextColor(SSD1306_BLACK);
     display.setCursor(2, 2);
     display.println("SERVICE MENU");
+#ifdef SHOW_PROTOCOL_MODE_INDICATOR
+    drawProtocolIndicator();
+#endif
     display.setTextColor(SSD1306_WHITE);
 
     if (currentProfile.serviceP1.key == 0 && currentProfile.serviceP2.key == 0 && currentProfile.testP1.key == 0 &&
