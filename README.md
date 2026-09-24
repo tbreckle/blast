@@ -23,7 +23,7 @@ B.L.A.S.T. is a complete arcade controller solution designed for retro gaming an
 - **USB & Wireless Support** - HID-compliant keyboard interface
 
 ### Software
-- **Configuration Tool** - Cross-platform Rust GUI application for easy setup
+- **Configuration Tool** - Cross-platform Rust GUI application built with [Slint](https://slint.dev) for easy setup
 - **Profile Management** - Save and load multiple button configurations
 - **Real-time Serial Communication** - Instant updates between device and computer
 - **Themeable UI** - Light/Dark/System theme support
@@ -40,9 +40,12 @@ blast/
 │   └── serializer.cpp # Serial communication protocol
 │
 ├── app/               # Rust configuration tool
+│   ├── ui/
+│   │   └── app.slint  # Slint user interface definition
 │   ├── src/
 │   │   ├── main.rs    # Application entry point
-│   │   ├── ui.rs      # egui-based user interface
+│   │   ├── ui.rs      # UI logic connecting app.slint to the device
+│   │   ├── keymap.rs  # Key capture for button bindings
 │   │   ├── protocol.rs # Serial protocol implementation
 │   │   └── types.rs   # Data structures
 │   └── Cargo.toml
@@ -80,8 +83,9 @@ blast/
 ### Configuration Tool
 
 **Requirements:**
-- Rust 1.70+
+- Rust 1.92+ (required by Slint 1.18)
 - Cargo
+- Linux only: `libudev-dev` (serial port access), `libfontconfig-dev` (fonts) and `pkg-config`
 
 **Building & Running:**
 ```bash
@@ -127,6 +131,12 @@ For version history and release notes, see [CHANGELOG.md](CHANGELOG.md).
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+### Made with Slint
+
+<a href="https://slint.dev"><img src="https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png" alt="Made with Slint" height="60"></a>
+
+The configuration tool's user interface is built with [Slint](https://slint.dev), used under the [Slint Royalty-free Desktop, Mobile, and Web Applications License 2.0](https://github.com/slint-ui/slint/blob/master/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md). The app also shows the Slint attribution under **Help → About B.L.A.S.T.**
 
 ## Contributing
 

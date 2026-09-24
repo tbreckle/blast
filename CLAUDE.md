@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 B.L.A.S.T. (Button Logic & Arcade Simulation Terminal) is a configurable arcade controller with two main components:
 - **Firmware** (`firmware/`): C++/Arduino running on RP2040/RP2350 (Raspberry Pi Pico), Arduino-Pico core 6.1.1
-- **App** (`app/`): Rust/egui desktop configuration tool (Linux, Windows, macOS)
+- **App** (`app/`): Rust/Slint desktop configuration tool (Linux, Windows, macOS)
 - **PCB** (`pcb/`): KiCAD hardware design files
 
 `app/CLAUDE.md` and `firmware/CLAUDE.md` hold the per-component file maps, dependencies and pin conventions.
@@ -17,12 +17,12 @@ B.L.A.S.T. (Button Logic & Arcade Simulation Terminal) is a configurable arcade 
 ```bash
 cargo build                  # debug build
 cargo build --release        # release build (LTO, opt-level "z", panic=abort, stripped)
-cargo test                   # run tests (currently only slip.rs has unit tests)
-cargo test slip::tests::<name>   # run a single test
+cargo test                   # run tests (keymap, types, slip, ui::tests)
+cargo test keymap::tests::<name>   # run a single test
 cargo clippy                 # lint (warnings are CI failures)
 cargo fmt --check            # CI formatting check
 ```
-On Linux the `serialport` crate needs `libudev-dev` and `pkg-config`.
+On Linux the build needs `libudev-dev` (serialport), `libfontconfig-dev` (Slint's font loading links fontconfig/freetype) and `pkg-config`. Slint 1.18 needs Rust 1.92+.
 
 ### Firmware (Arduino CLI), run from the repo root
 ```bash
@@ -60,6 +60,7 @@ The OLED shows the active mode as "B" or "S" (controlled by `SHOW_PROTOCOL_MODE_
 
 **Keep both sides in sync:**
 - Command and error IDs are defined twice: `#define CMD_*`/`ERR_*` in `serializer.h` and `pub const CMD_*` in `protocol.rs`.
+- The USB product name and VID/PID set in `setup()` (`firmware.ino`) are used by the app to preselect the controller (`BLAST_PRODUCT_NAME`/`BLAST_USB_ID` in `app/src/ui.rs`) and by `firmware/flash.sh` to find the port.
 - Profile/settings structs are C structs in the firmware and `#[repr(C, packed)]` in `app/src/types.rs`. They are sent as raw bytes, so any field change has to be mirrored exactly on both sides.
 - `SET_PROFILE` only updates RAM. `SAVE_PROFILE` persists to EEPROM (flash-emulated, `storage.cpp`, up to `MAX_PROFILES` slots of `sizeof(ButtonMapping)`).
 - Changing the `ButtonMapping` layout also changes the EEPROM layout. Bump `STORAGE_VERSION` in `storage.h` and extend `migrateStorage()` so profiles on existing devices survive. The size test in `app/src/types.rs` guards the app side.
@@ -78,7 +79,7 @@ The OLED shows the active mode as "B" or "S" (controlled by `SHOW_PROTOCOL_MODE_
 - `blast_protocol.cpp` keeps its own copy of the TLC pin map (`TLC_*`), which must match the `TLC_PIN_*` constants in `firmware.ino`.
 
 ### App GUI
-Immediate-mode GUI (egui/eframe), almost entirely in `ui.rs`. Long-running serial operations run on background threads while an overlay spinner is shown. Theme and settings are persisted via confy.
+Slint UI: the layout is declared in `app/ui/app.slint` (compiled by `build.rs`), the state and logic live in `app/src/ui.rs` (`AppState` + `Controller`). Long-running serial operations run on background threads while a busy overlay is shown. Theme is persisted via confy. Slint is used under its royalty-free license, which requires the `AboutSlint` widget (Help → About) and the "Made with Slint" badge in README.md; don't remove either. See `app/CLAUDE.md`.
 
 ## Development Workflow
 

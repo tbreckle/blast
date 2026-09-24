@@ -90,14 +90,35 @@ pub const MOD_SHIFT: u8 = 0x4;
 pub const MOD_F: u8 = 0x8;
 pub const MOD_ESC: u8 = 0x10;
 
+/// Size of the profile name field including the null terminator.
+pub const NAME_SIZE: usize = 17;
+
 /// Size of the game name field including the null terminator.
 pub const GAME_NAME_SIZE: usize = 30;
+
+/// Read a null-terminated string from a fixed-size buffer.
+fn read_c_string(buf: &[u8]) -> String {
+    let null_pos = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..null_pos]).to_string()
+}
+
+/// Write a string into a fixed-size buffer, truncated to N - 1 bytes on a char boundary and
+/// zero-filled, so the buffer is always null-terminated.
+fn write_c_string<const N: usize>(value: &str) -> [u8; N] {
+    let mut len = value.len().min(N - 1);
+    while !value.is_char_boundary(len) {
+        len -= 1;
+    }
+    let mut buf = [0u8; N];
+    buf[..len].copy_from_slice(&value.as_bytes()[..len]);
+    buf
+}
 
 /// ButtonMapping structure matching firmware (79 bytes total)
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default)]
 pub struct ButtonMapping {
-    pub name: [u8; 17], // Max 16 chars + null terminator
+    pub name: [u8; NAME_SIZE], // Max 16 chars + null terminator
     pub start_p1: KeyCombo,
     pub start_p2: KeyCombo,
     pub coin_p1: KeyCombo,
@@ -119,28 +140,21 @@ pub struct ButtonMapping {
 
 impl ButtonMapping {
     pub fn name_str(&self) -> String {
-        let null_pos = self.name.iter().position(|&c| c == 0).unwrap_or(8);
-        String::from_utf8_lossy(&self.name[..null_pos]).to_string()
+        read_c_string(&self.name)
+    }
+
+    /// Set the profile name, truncated to NAME_SIZE - 1 bytes (on a char boundary).
+    pub fn set_name(&mut self, name: &str) {
+        self.name = write_c_string(name);
     }
 
     pub fn game_name_str(&self) -> String {
-        let game_name = self.game_name;
-        let null_pos = game_name
-            .iter()
-            .position(|&c| c == 0)
-            .unwrap_or(GAME_NAME_SIZE);
-        String::from_utf8_lossy(&game_name[..null_pos]).to_string()
+        read_c_string(&self.game_name)
     }
 
     /// Set the game name, truncated to GAME_NAME_SIZE - 1 bytes (on a char boundary).
     pub fn set_game_name(&mut self, game_name: &str) {
-        let mut len = game_name.len().min(GAME_NAME_SIZE - 1);
-        while !game_name.is_char_boundary(len) {
-            len -= 1;
-        }
-        let mut buf = [0u8; GAME_NAME_SIZE];
-        buf[..len].copy_from_slice(&game_name.as_bytes()[..len]);
-        self.game_name = buf;
+        self.game_name = write_c_string(game_name);
     }
 }
 
@@ -200,6 +214,20 @@ mod tests {
     #[test]
     fn button_mapping_matches_firmware_size() {
         assert_eq!(std::mem::size_of::<ButtonMapping>(), 79);
+    }
+
+    #[test]
+    fn name_is_truncated_on_char_boundary() {
+        let mut profile = ButtonMapping::default();
+        profile.set_name("Time Crisis");
+        assert_eq!(profile.name_str(), "Time Crisis");
+        profile.set_name("Time Crisis (Copy)");
+        assert_eq!(profile.name_str(), "Time Crisis (Cop");
+        // "ä" is 2 bytes and would cross the 16-byte limit.
+        profile.set_name(&format!("{}ä", "a".repeat(15)));
+        assert_eq!(profile.name_str(), "a".repeat(15));
+        let name = profile.name;
+        assert_eq!(name[NAME_SIZE - 1], 0);
     }
 
     #[test]

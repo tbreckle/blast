@@ -8,20 +8,34 @@ subsystem = "windows"
 
 [dependencies]
 serialport = "4.5"
-eframe = "0.29"
-egui = "0.29"
+# Slint is used under the Slint Royalty-free Desktop, Mobile, and Web Applications License 2.0,
+# which requires the AboutSlint widget (Help > About) or the attribution badge (README.md).
+slint = { version = "1.18", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-femtovg",
+    "renderer-software",
+    "accessibility",
+    "compat-1-2",
+] }
 anyhow = "1.0"
 thiserror = "1.0"
 confy = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 
+[build-dependencies]
+slint-build = "1.18"
+
 [profile.dev]
-opt-level = 0           # No optimization.
-debug = true            # Full debug info.
-strip = false           # Keep symbols.
+opt-level = 0              # No optimization.
+debug = "line-tables-only"
+strip = false              # Keep symbols.
 debug-assertions = true
 overflow-checks = true
-incremental = true      # Faster recompilation.
+incremental = true         # Faster recompilation.
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 opt-level = 'z'   # Optimize for size.
