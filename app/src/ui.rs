@@ -334,17 +334,16 @@ fn blast_port_index(ports: &[SerialPortInfo]) -> Option<usize> {
         })
 }
 
-/// Label for a serial port in the port ComboBox.
+/// Label for a serial port in the port ComboBox. USB ports end in `[VID:PID]`, because Windows
+/// reports every CDC device as "USB Serial Device" and the ID is the only way to tell them apart.
 fn port_label(port: &SerialPortInfo) -> String {
     match &port.port_type {
         SerialPortType::UsbPort(info) => {
-            let name = info
-                .product
-                .as_deref()
-                .or(info.manufacturer.as_deref())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("VID:{:04X} PID:{:04X}", info.vid, info.pid));
-            format!("{} ({})", port.port_name, name)
+            let id = format!("[{:04X}:{:04X}]", info.vid, info.pid);
+            match info.product.as_deref().or(info.manufacturer.as_deref()) {
+                Some(name) => format!("{} ({}) {}", port.port_name, name, id),
+                None => format!("{} {}", port.port_name, id),
+            }
         }
         _ => port.port_name.clone(),
     }
@@ -555,11 +554,13 @@ impl Controller {
             let result = (|| -> Result<(FirmwareConnection, Vec<ButtonMapping>, FirmwareVersion), String> {
                 let port = serialport::new(&port_name, 115200)
                     .timeout(Duration::from_millis(100))
+                    // The Arduino-Pico core drops all USB serial output while DTR is low.
+                    // Linux raises DTR on open anyway, but on Windows serialport clears it.
+                    .dtr_on_open(true)
                     .open()
                     .map_err(|e| format!("Failed to open port: {}", e))?;
 
                 // Flush stale data and give device time to stabilize after port open.
-                // On Windows, opening a COM port asserts DTR which resets Arduino/Pico devices.
                 let _ = port.clear(serialport::ClearBuffer::All);
                 thread::sleep(Duration::from_millis(500));
                 let _ = port.clear(serialport::ClearBuffer::Input);
@@ -991,6 +992,22 @@ mod tests {
             Some(2)
         );
         assert_eq!(blast_port_index(&[plain, other, by_id]), Some(2));
+    }
+
+    #[test]
+    fn port_label_ends_with_usb_id() {
+        assert_eq!(
+            port_label(&port(
+                "COM3",
+                Some((0xF144, 0x0001, Some("USB Serial Device")))
+            )),
+            "COM3 (USB Serial Device) [F144:0001]"
+        );
+        assert_eq!(
+            port_label(&port("COM4", Some((0x041E, 0x3278, None)))),
+            "COM4 [041E:3278]"
+        );
+        assert_eq!(port_label(&port("/dev/ttyS0", None)), "/dev/ttyS0");
     }
 
     #[test]
