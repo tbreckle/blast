@@ -40,7 +40,7 @@ B<cmd>[x<field>[x<field>...]]\n
 | `B5` | `B5x<player>x<value>[x<extra>]` | Action A button LED |
 | `B6` | `B6x<player>x<value>[x<extra>]` | Action B button LED |
 | `B7` | `B7x<value>[x<extra>]` | Pause, save and load button LEDs (all three together) |
-| `BL` | `BLx<gamename>` | Switch to the profile with this game name (see [Profile switching by game name](#profile-switching-by-game-name)) |
+| `BL` | `BLx<gamename>` | Switch to the profile with this game name. `BLx` with an empty name leaves the game and returns to the main menu. See [Profile switching by game name](#profile-switching-by-game-name). |
 | `B+` | `B+` | Switch to SLIP mode (see [Switching to SLIP mode](#switching-to-slip-mode)) |
 
 "Turns off all LEDs" means all 12 LED channels, including any flash sequence still running.
@@ -82,9 +82,11 @@ Details:
 - If a profile matches, the controller loads it and switches to the profile screen, just like selecting it in the menu. The LEDs are set for the new profile immediately, so LED commands sent after `BL` (even in the same write) are not overwritten.
 - If the matching profile is already active on the profile screen, nothing happens and the LEDs are left alone.
 - If no profile matches, the command is ignored.
+- An empty game name (`BLx`) leaves the game: if a profile or the service menu is active, the controller returns to the main menu (profile selection), just like choosing "Back" in the profile menu. The LEDs switch to the main menu's breathing effect immediately. On the main menu or splash screen, `BLx` does nothing.
 
 ```
 BLxtcrisis      Switch to the profile with game name "tcrisis"
+BLx             Game ended: return to the main menu
 ```
 
 ## Button-to-LED mapping
@@ -111,6 +113,7 @@ Channel 3 is not mapped to any BLAST command.
 ```
 B1              Host started: all LEDs off
 BLxsf2          Switch to the profile for game "sf2" (if there is one)
+BLx             Game ended: return to the main menu
 B3x1x1          Player 1 start LED on
 B4x0x2          Both coin LEDs blink (500 ms on / 500 ms off)
 B4x0x2x200      Both coin LEDs blink fast (200 ms on / 200 ms off)
@@ -132,7 +135,7 @@ printf 'B1\nB3x0x2x250\n' > /dev/ttyACM0
 
 The configuration app uses a separate binary SLIP protocol (`serializer.cpp`, `app/src/protocol.rs`) on the same serial port. Only one protocol is active at a time:
 
-1. The host sends `B+\n`. The firmware switches to SLIP mode and treats everything after that as SLIP frames. No response is sent.
+1. The host sends `B+\n`. The firmware switches to SLIP mode and treats everything after that as SLIP frames. No response is sent. The RGB status LED turns green while SLIP mode is active.
 2. The host sends the SLIP command `CMD_SWITCH_BLAST` (`0x0A`). The firmware answers with `CMD_RESPONSE_OK` and switches back to BLAST mode.
 
 The config app does both on its own when connecting and disconnecting. While the device is in SLIP mode it ignores BLAST commands, so a crashed or killed config app can leave it in SLIP mode until the next reboot.

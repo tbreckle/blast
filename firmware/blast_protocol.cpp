@@ -242,9 +242,9 @@ static void handleGroupLedCommand(const char* line) {
 #endif
 }
 
-// Handle BL: switch to the profile whose gameName matches.
+// Handle BL: switch to the profile whose gameName matches, or leave the game if empty.
 static void handleGameNameCommand(const char* line) {
-    // Format: BLx{GAMENAME}
+    // Format: BLx{GAMENAME}, BLx = leave game
     if (line[2] != 'x' && line[2] != 'X') {
 #ifdef DEBUG
         Serial2.println("[BLAST] Invalid BL command: missing game name.");
@@ -253,6 +253,18 @@ static void handleGameNameCommand(const char* line) {
     }
 
     const char* gameName = &line[3];
+
+    // Empty game name: leave the game and return to the main menu.
+    if (gameName[0] == '\0') {
+        if (currentMenuState == STATE_PROFILE || currentMenuState == STATE_SERVICEMENU) {
+#ifdef DEBUG
+            Serial2.println("[BLAST] Game ended, returning to main menu.");
+#endif
+            returnToMainMenu();
+        }
+        return;
+    }
+
     int16_t profileIndex = findProfileByGameName(gameName);
     if (profileIndex < 0) {
 #ifdef DEBUG

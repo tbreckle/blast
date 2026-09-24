@@ -29,7 +29,7 @@ USB CDC `Serial` (115200 baud) runs one parser at a time, selected by the global
   - `B1`/`B2`: host connect/disconnect; both turn off all LEDs and cancel active flash sequences
   - `B3`–`B6`: LEDs for start/coin/action A/action B, format `B{n}x{player}x{value}[x{extra}]`. Player `0` means both players.
   - `B7x{value}[x{extra}]`: pause, save and load LEDs as a group
-  - `BLx{gamename}`: switch to the first profile whose `ButtonMapping::gameName` equals the name exactly (via `findProfileByGameName()` + `activateProfile()`); ignored if nothing matches
+  - `BLx{gamename}`: switch to the first profile whose `ButtonMapping::gameName` equals the name exactly (via `findProfileByGameName()` + `activateProfile()`); ignored if nothing matches. An empty name (`BLx`) calls `returnToMainMenu()` when a profile or the service menu is active.
   - `B+`: switch to SLIP mode
   - LED values are 0=off, 1=on, 2=blink, 3=flash, 4=breath. `extra` is the blink/breath duration in ms, or the number of flashes.
   - "Flash" is a timed on/off sequence run by `updateBlastFlash()` in the main loop.
@@ -47,7 +47,7 @@ When changing SLIP commands or `ButtonMapping`/`FirmwareSettings`, mirror the ch
   - `ledSetMode()` provides OFF / ON / BREATHING / BLINKING with brightness (0-4095), period and phase offset
 - SSD1306 OLED display (I2C, address 0x3C, 128x64). It shows a "B"/"S" protocol mode indicator when `SHOW_PROTOCOL_MODE_INDICATOR` is defined.
 - USB HID keyboard emulation. The USB device is renamed in `setup()` (product "B.L.A.S.T.", manufacturer "tbreckle", VID/PID 0xF144/0x0001).
-- RGB status LED on direct GPIO pins (`PIN_RGB_LED_*`)
+- RGB status LED on direct GPIO pins (`PIN_RGB_LED_*`): green during boot and in SLIP mode, red on init failure, blue when running (dimmed in profile mode). Colors are set via `updateStatusLed()`.
 
 ## Debug
 

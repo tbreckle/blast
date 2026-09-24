@@ -308,8 +308,7 @@ void handleMenuNavigation(bool up, bool right, bool down, bool left, bool enter)
             }
         } else if (enter) {
             if (selectedProfileMenuItem == PROFILE_MENU_BACK) {
-                setMenuState(STATE_SELECT);
-                selectedProfileIndex = currentProfileIndex;
+                returnToMainMenu();
             } else if (selectedProfileMenuItem == PROFILE_MENU_SERVICE) {
                 setMenuState(STATE_SERVICEMENU);
             } else if (selectedProfileMenuItem == PROFILE_MENU_EXIT) {

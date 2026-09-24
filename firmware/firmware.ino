@@ -36,7 +36,10 @@ struct KeyPressState {
         uint32_t pressTime;
         KeyCombo key;
 };
-KeyPressState keyPressStates[MCP_23017_CHANNELS]{};
+// One slot per MCP channel (released when the button is released) plus one slot for
+// presses without a button channel, e.g. from the menu (released after the minimum duration).
+const uint8_t KEY_SLOT_TIMED{MCP_23017_CHANNELS};
+KeyPressState keyPressStates[MCP_23017_CHANNELS + 1]{};
 uint8_t currentProfileIndex{0};
 ButtonMapping currentProfile;
 bool redrawDisplay{true};
@@ -262,6 +265,19 @@ void setRGBLedSuccess(bool dim = false) {
     }
 }
 
+void updateStatusLed() {
+    /**
+     * Set the RGB status LED according to the current protocol mode and menu state.
+     *
+     * Green while in SLIP mode (config app connected), otherwise blue (dimmed in profile mode).
+     */
+    if (serialProtocolMode == PROTOCOL_SLIP) {
+        setRGBLed(0, 65535, 0);
+    } else {
+        setRGBLedSuccess(currentMenuState == STATE_PROFILE);
+    }
+}
+
 void tlcSetLed(uint8_t channel, uint16_t value) {
     /**
      * Set the PWM value for a specific TLC59711 LED channel with gamma correction.
@@ -463,7 +479,7 @@ void handleMenuStateTransitions() {
             for (uint8_t i = 0; i < 12; i++) {
                 ledSetMode(i, LED_BREATHING, 4095, 2000);
             }
-            setRGBLedSuccess();
+            updateStatusLed();
         } else if (currentMenuState == STATE_PROFILE) {
             // Selected profile - solid on.
             for (uint8_t i = 0; i < 12; i++) {
@@ -475,7 +491,7 @@ void handleMenuStateTransitions() {
                     ledSetMode(map.tlcPin - 1, LED_ON, 4095);
                 }
             }
-            setRGBLedSuccess(true);
+            updateStatusLed();
         } else if (currentMenuState == STATE_SPLASH) {
             // Splash screen - fast blinking effect.
             for (uint8_t i = 0; i < 12; i++) {
@@ -486,7 +502,7 @@ void handleMenuStateTransitions() {
             for (uint8_t i = 0; i < 12; i++) {
                 ledSetMode(i, LED_BLINKING, 4095, 1000);
             }
-            setRGBLedSuccess();
+            updateStatusLed();
         } else {
             // Unknown state - turn off LEDs.
 #ifdef DEBUG
@@ -497,6 +513,18 @@ void handleMenuStateTransitions() {
                 ledSetMode(i, LED_OFF);
             }
         }
+    }
+}
+
+void handleProtocolModeTransitions() {
+    /**
+     * Update the status LED when the serial protocol mode changes (BLAST <-> SLIP).
+     *
+     */
+    static SerialProtocolMode oldProtocolMode{PROTOCOL_BLAST};
+    if (serialProtocolMode != oldProtocolMode) {
+        oldProtocolMode = serialProtocolMode;
+        updateStatusLed();
     }
 }
 
@@ -519,11 +547,24 @@ void activateProfile(uint8_t index) {
     handleMenuStateTransitions();
 }
 
+void returnToMainMenu() {
+    /**
+     * Leave the active profile and return to the profile selection (main menu).
+     *
+     * Applies the state transition (LEDs) immediately, like activateProfile().
+     */
+    selectedProfileIndex = currentProfileIndex;
+    setMenuState(STATE_SELECT);
+    handleMenuStateTransitions();
+}
+
 void handleButtonPress(KeyCombo* key, uint8_t channel) {
     /**
      * Handle a single button press by sending the corresponding key combo.
      *
      * @param key Pointer to the KeyCombo structure representing the button press.
+     * @param channel MCP channel (0-15) of the button, or 255 for a press without a button
+     *                (released after the minimum press duration).
      *
      * @note This function presses the keys and starts a timer for releasing them.
      *       The actual release is handled in the main loop based on keyPressTime.
@@ -549,6 +590,12 @@ void handleButtonPress(KeyCombo* key, uint8_t channel) {
         Serial2.println(key->key);
     }
 #endif
+
+    // Release a key still held in this slot first, so it can't get stuck.
+    uint8_t slot = (channel < MCP_23017_CHANNELS) ? channel : KEY_SLOT_TIMED;
+    if (keyPressStates[slot].active) {
+        handleButtonRelease(&keyPressStates[slot].key);
+    }
 
     if (key->modifiers & MOD_ESC) {
 #ifdef DEBUG
@@ -583,10 +630,10 @@ void handleButtonPress(KeyCombo* key, uint8_t channel) {
         }
     }
 
-    // Record per-channel state for independent release tracking.
-    keyPressStates[channel].active = true;
-    keyPressStates[channel].pressTime = millis();
-    keyPressStates[channel].key = *key;
+    // Record per-slot state for independent release tracking.
+    keyPressStates[slot].active = true;
+    keyPressStates[slot].pressTime = millis();
+    keyPressStates[slot].key = *key;
 }
 
 void handleButtonRelease(const KeyCombo* key) {
@@ -855,15 +902,16 @@ void loop() {
     // Update display.
     updateDisplay();
 
-    // Per-channel key release: each button is tracked independently.
+    // Per-slot key release: each button is tracked independently.
     // A key is released when its button is physically released and the minimum press time has elapsed.
-    for (uint8_t ch = 0; ch < MCP_23017_CHANNELS; ch++) {
-        if (keyPressStates[ch].active) {
-            bool minTimeElapsed = (millis() - keyPressStates[ch].pressTime >= globalSettings.keyPressDurationMs);
-            bool buttonReleased = !debounceMcp.channelHeld(ch);
+    // The timed slot has no button and is released after the minimum press time only.
+    for (uint8_t slot = 0; slot <= KEY_SLOT_TIMED; slot++) {
+        if (keyPressStates[slot].active) {
+            bool minTimeElapsed = (millis() - keyPressStates[slot].pressTime >= globalSettings.keyPressDurationMs);
+            bool buttonReleased = (slot == KEY_SLOT_TIMED) || !debounceMcp.channelHeld(slot);
             if (minTimeElapsed && buttonReleased) {
-                handleButtonRelease(&keyPressStates[ch].key);
-                keyPressStates[ch].active = false;
+                handleButtonRelease(&keyPressStates[slot].key);
+                keyPressStates[slot].active = false;
             }
         }
     }
@@ -879,6 +927,7 @@ void loop() {
     } else {
         processSerialCommand();
     }
+    handleProtocolModeTransitions();
 
     // Update flash LED states (BLAST protocol flash command).
     updateBlastFlash();
