@@ -1,7 +1,7 @@
 # B.L.A.S.T. - Button Logic & Arcade Simulation Terminal
 
 <p align="center">
-  <img src="logo.jpg" alt="B.L.A.S.T. logo" width="600">
+  <img src="images/logo.png" alt="B.L.A.S.T. logo" width="600">
 </p>
 
 A comprehensive open-source arcade controller platform featuring customizable button mapping, LED control, and a modern configuration tool.
