@@ -169,18 +169,17 @@ static void handlePlayerLedCommand(uint8_t commandNum, const char* line) {
         return;
     }
 
-    uint8_t player = (uint8_t)fields[0];
-    uint8_t value = (uint8_t)fields[1];
-    uint16_t extra = (fieldCount >= 3) ? fields[2] : 0;
-    bool hasExtra = (fieldCount >= 3);
-
-    if (player > 2) {
+    if (fields[0] > 2 || fields[1] > BLAST_LED_BREATH) {
 #ifdef DEBUG
-        Serial2.print("[BLAST] Invalid player: ");
-        Serial2.println(player);
+        Serial2.println("[BLAST] Invalid player or LED value.");
 #endif
         return;
     }
+
+    uint8_t player = static_cast<uint8_t>(fields[0]);
+    uint8_t value = static_cast<uint8_t>(fields[1]);
+    uint16_t extra = (fieldCount >= 3) ? fields[2] : 0;
+    bool hasExtra = (fieldCount >= 3);
 
     if (player == 0) {
         // Player 0: apply to both players.
