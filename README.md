@@ -261,6 +261,28 @@ The configuration tool's user interface is built with [Slint](https://slint.dev)
 
 **🪙 INSERT COIN TO CONTINUE 🪙**
 
-<sub>Built for lightgun and arcade fans.</sub>
+<sub>Made with 🔥 for light gun fans.</sub>
 
 </div>
+
+---
+
+## ⚖️ Legal Disclaimer
+
+**USE AT YOUR OWN RISK**
+
+This software and firmware are provided "AS IS" without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and non-infringement.
+
+**Important Notes:**
+
+- The developers and contributors of this project assume **no liability** for any damages, losses, or issues arising from the use, misuse, or inability to use this software or hardware
+- This includes, but is not limited to: hardware damage, data loss, system malfunction, or any other direct or indirect consequences
+- By using this software, you acknowledge that you do so at your own risk
+- Users are responsible for ensuring compatibility with their systems and compliance with local regulations
+- This project is an independent effort and is not affiliated with or endorsed by any hardware manufacturer unless explicitly stated
+
+**For Hobbyist and Educational Use:**
+
+This project is intended for personal, educational, and hobbyist use. Users modifying firmware or hardware configurations should have appropriate technical knowledge and accept full responsibility for their modifications.
+
+If you're unsure about any aspect of installation or use, please consult the documentation or seek assistance from knowledgeable individuals before proceeding.
