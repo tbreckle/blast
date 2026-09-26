@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-26
+
 ### Added
 - CI/CD pipeline with GitFlow releases: `release-start.yml` creates release/hotfix branches, `release-finish.yml` tags, builds and publishes GitHub Releases
 - SemVer versioning via `scripts/version.sh`, injected into app and firmware at build time (unofficial builds are `0.0.0+<sha>`)
