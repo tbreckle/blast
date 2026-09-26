@@ -49,6 +49,7 @@ typedef struct {
 #define CMD_SAVE_PROFILE 0x07
 #define CMD_GET_MAX_PROFILES 0x08
 #define CMD_REBOOT_FLASH 0x09
+#define CMD_SWITCH_BLAST 0x0A
 #define CMD_RESPONSE_OK 0x10
 #define CMD_RESPONSE_ERROR 0x11
 
@@ -93,6 +94,7 @@ void handleSetProfile(const uint8_t* payload, uint16_t length);
 void handleGetProfileCount();
 void handleSaveProfile(const uint8_t* payload, uint16_t length);
 void handleRebootFlash();
+void handleSwitchBlast();
 
 // Main command processor.
 void processSerialCommand();

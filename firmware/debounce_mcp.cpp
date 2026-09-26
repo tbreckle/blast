@@ -125,10 +125,6 @@ void DebounceMCP::readPort(uint8_t port) {
     }
 }
 
-void DebounceMCP::processChannel(uint8_t channel, uint8_t newState) {
-    // No longer used — debounce logic is in update() and readPort().
-}
-
 void DebounceMCP::setActiveLow(bool enabled) {
     activeLow = enabled;
 }

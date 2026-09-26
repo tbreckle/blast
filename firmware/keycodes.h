@@ -14,7 +14,8 @@ typedef struct {
 #define MOD_F 0x8     // Function key modifier (e.g. F1-F12).
 #define MOD_ESC 0x10  // Escape key.
 
-// This struct consumes 49 bytes in total (16 for name + 1 padding + 32 for key combos).
+// This struct consumes 79 bytes in total (17 for name + 32 for key combos + 30 for game name).
+// Changing the layout requires a new STORAGE_VERSION and a migration in storage.cpp.
 typedef struct {
         char name[17];  // Max 16 chars + null terminator.
         KeyCombo startP1;
@@ -33,4 +34,5 @@ typedef struct {
         KeyCombo save;
         KeyCombo load;
         KeyCombo exit;
+        char gameName[30];  // MAMEHooker game name, max 29 chars + null terminator. Empty = none.
 } ButtonMapping;

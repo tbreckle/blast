@@ -2,14 +2,17 @@
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
 #include <Keyboard.h>
+#include <USB.h>
 #include <splash.h>
 
 #include "_debug.h"
+#include "blast_protocol.h"
 #include "debounce_mcp.h"
 #include "keycodes.h"
 #include "menu.h"
 #include "serializer.h"
 #include "storage.h"
+#include "version.h"
 
 // Display configuration.
 const uint8_t SCREEN_WIDTH{128};
@@ -17,10 +20,6 @@ const uint8_t SCREEN_HEIGHT{64};
 const int8_t OLED_RESET{-1};
 const uint8_t OLED_ADDRESS{0x3C};
 const uint8_t MAX_VISIBLE_PROFILES{4};
-// Firmware version
-#define FIRMWARE_VERSION_MAJOR 1
-#define FIRMWARE_VERSION_MINOR 0
-#define FIRMWARE_VERSION_PATCH 0
 
 // Global variables.
 MenuState currentMenuState{STATE_SPLASH};
@@ -30,11 +29,14 @@ uint8_t selectedProfileIndex{0};
 uint8_t selectedProfileMenuItem{0};
 uint32_t splashStartTime{0};
 struct KeyPressState {
-    bool active;
-    uint32_t pressTime;
-    KeyCombo key;
+        bool active;
+        uint32_t pressTime;
+        KeyCombo key;
 };
-KeyPressState keyPressStates[MCP_23017_CHANNELS]{};
+// One slot per MCP channel (released when the button is released) plus one slot for
+// presses without a button channel, e.g. from the menu (released after the minimum duration).
+const uint8_t KEY_SLOT_TIMED{MCP_23017_CHANNELS};
+KeyPressState keyPressStates[MCP_23017_CHANNELS + 1]{};
 uint8_t currentProfileIndex{0};
 ButtonMapping currentProfile;
 bool redrawDisplay{true};
@@ -43,14 +45,6 @@ uint32_t lockTimeIntB{0L};
 uint16_t tlcPwmBuffer[12]{0};
 uint16_t tlcPwmDirtyBuffer[12]{0};
 bool tlcDirty{false};
-
-// LED operation modes.
-enum LedMode {
-    LED_OFF = 0,        // LED is off.
-    LED_ON = 1,         // LED is constantly on at set brightness.
-    LED_BREATHING = 2,  // LED fades in/out smoothly.
-    LED_BLINKING = 3    // LED blinks on/off.
-};
 
 // Per-channel LED configuration.
 struct LedChannelConfig {
@@ -68,6 +62,9 @@ FirmwareSettings globalSettings = {
     FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR, FIRMWARE_VERSION_PATCH,
     50  // keyPressDurationMs (default 50ms)
 };
+
+// Serial protocol mode: BLAST at startup, SLIP when app connects via B+.
+SerialProtocolMode serialProtocolMode = PROTOCOL_BLAST;
 
 // Button pin definitions.
 const uint8_t MCP_PIN_START_P1{9};
@@ -262,6 +259,19 @@ void setRGBLedSuccess(bool dim = false) {
         setRGBLed(0, 0, 16384);
     } else {
         setRGBLed(0, 0, 65535);
+    }
+}
+
+void updateStatusLed() {
+    /**
+     * Set the RGB status LED according to the current protocol mode and menu state.
+     *
+     * Green while in SLIP mode (config app connected), otherwise blue (dimmed in profile mode).
+     */
+    if (serialProtocolMode == PROTOCOL_SLIP) {
+        setRGBLed(0, 65535, 0);
+    } else {
+        setRGBLedSuccess(currentMenuState == STATE_PROFILE);
     }
 }
 
@@ -466,7 +476,7 @@ void handleMenuStateTransitions() {
             for (uint8_t i = 0; i < 12; i++) {
                 ledSetMode(i, LED_BREATHING, 4095, 2000);
             }
-            setRGBLedSuccess();
+            updateStatusLed();
         } else if (currentMenuState == STATE_PROFILE) {
             // Selected profile - solid on.
             for (uint8_t i = 0; i < 12; i++) {
@@ -478,7 +488,7 @@ void handleMenuStateTransitions() {
                     ledSetMode(map.tlcPin - 1, LED_ON, 4095);
                 }
             }
-            setRGBLedSuccess(true);
+            updateStatusLed();
         } else if (currentMenuState == STATE_SPLASH) {
             // Splash screen - fast blinking effect.
             for (uint8_t i = 0; i < 12; i++) {
@@ -489,7 +499,7 @@ void handleMenuStateTransitions() {
             for (uint8_t i = 0; i < 12; i++) {
                 ledSetMode(i, LED_BLINKING, 4095, 1000);
             }
-            setRGBLedSuccess();
+            updateStatusLed();
         } else {
             // Unknown state - turn off LEDs.
 #ifdef DEBUG
@@ -503,11 +513,55 @@ void handleMenuStateTransitions() {
     }
 }
 
+void handleProtocolModeTransitions() {
+    /**
+     * Update the status LED when the serial protocol mode changes (BLAST <-> SLIP).
+     *
+     */
+    static SerialProtocolMode oldProtocolMode{PROTOCOL_BLAST};
+    if (serialProtocolMode != oldProtocolMode) {
+        oldProtocolMode = serialProtocolMode;
+        updateStatusLed();
+    }
+}
+
+void activateProfile(uint8_t index) {
+    /**
+     * Load a profile from storage and make it the active profile.
+     *
+     * @param index Profile slot index (0 to MAX_PROFILES-1).
+     *
+     * Switches to STATE_PROFILE and applies the state transition (LEDs) immediately,
+     * even if already in STATE_PROFILE, so LED commands processed afterwards are not
+     * overwritten by the transition in the next loop cycle.
+     */
+    loadProfile(index, &currentProfile);
+    currentProfileIndex = index;
+    selectedProfileIndex = index;
+    selectedProfileMenuItem = 0;
+    setMenuState(STATE_PROFILE);
+    oldMenuState = STATE_NONE;
+    handleMenuStateTransitions();
+}
+
+void returnToMainMenu() {
+    /**
+     * Leave the active profile and return to the profile selection (main menu).
+     *
+     * Applies the state transition (LEDs) immediately, like activateProfile().
+     */
+    selectedProfileIndex = currentProfileIndex;
+    setMenuState(STATE_SELECT);
+    handleMenuStateTransitions();
+}
+
 void handleButtonPress(KeyCombo* key, uint8_t channel) {
     /**
      * Handle a single button press by sending the corresponding key combo.
      *
      * @param key Pointer to the KeyCombo structure representing the button press.
+     * @param channel MCP channel (0-15) of the button, or 255 for a press without a button
+     *                (released after the minimum press duration).
      *
      * @note This function presses the keys and starts a timer for releasing them.
      *       The actual release is handled in the main loop based on keyPressTime.
@@ -533,6 +587,12 @@ void handleButtonPress(KeyCombo* key, uint8_t channel) {
         Serial2.println(key->key);
     }
 #endif
+
+    // Release a key still held in this slot first, so it can't get stuck.
+    uint8_t slot = (channel < MCP_23017_CHANNELS) ? channel : KEY_SLOT_TIMED;
+    if (keyPressStates[slot].active) {
+        handleButtonRelease(&keyPressStates[slot].key);
+    }
 
     if (key->modifiers & MOD_ESC) {
 #ifdef DEBUG
@@ -567,10 +627,10 @@ void handleButtonPress(KeyCombo* key, uint8_t channel) {
         }
     }
 
-    // Record per-channel state for independent release tracking.
-    keyPressStates[channel].active = true;
-    keyPressStates[channel].pressTime = millis();
-    keyPressStates[channel].key = *key;
+    // Record per-slot state for independent release tracking.
+    keyPressStates[slot].active = true;
+    keyPressStates[slot].pressTime = millis();
+    keyPressStates[slot].key = *key;
 }
 
 void handleButtonRelease(const KeyCombo* key) {
@@ -636,6 +696,12 @@ void setup() {
      * Controller initialization.
      *
      */
+    USB.disconnect();
+    USB.setProduct("B.L.A.S.T.");
+    USB.setManufacturer("tbreckle");
+    USB.setVIDPID(0xF144, 0x0001);
+    USB.connect();
+
     // Serial (aka Serial1) is USB CDC and used for main communication with host.
     Serial.begin(115200);
     // Serial2 is HW UART 1 and used for debug output.
@@ -667,10 +733,11 @@ void setup() {
 #ifdef DEBUG
     Serial2.println("Initialize EEPROM.");
 #endif
-    EEPROM.begin(4096);
+    EEPROM.begin(EEPROM_SIZE);
     // Initialize storage on first run.
     // Uncomment if required.
     // intializeStorage();
+    migrateStorage();
 
 #ifdef DEBUG
     Serial2.println("Initialize Keyboard.");
@@ -716,6 +783,12 @@ void setup() {
     display.println("  -=[ B.L.A.S.T. ]=-");
     display.println("        |");
     display.println("     (INSERT COIN)");
+
+    // Firmware version centered in the bottom row (6 px per character at text size 1).
+    const char splashVersion[] = "v" FIRMWARE_VERSION_STRING;
+    const int16_t splashVersionX = (SCREEN_WIDTH - static_cast<int16_t>(sizeof(splashVersion) - 1) * 6) / 2;
+    display.setCursor(splashVersionX > 0 ? splashVersionX : 0, SCREEN_HEIGHT - 8);
+    display.print(splashVersion);
 
     display.display();
 
@@ -832,15 +905,16 @@ void loop() {
     // Update display.
     updateDisplay();
 
-    // Per-channel key release: each button is tracked independently.
+    // Per-slot key release: each button is tracked independently.
     // A key is released when its button is physically released and the minimum press time has elapsed.
-    for (uint8_t ch = 0; ch < MCP_23017_CHANNELS; ch++) {
-        if (keyPressStates[ch].active) {
-            bool minTimeElapsed = (millis() - keyPressStates[ch].pressTime >= globalSettings.keyPressDurationMs);
-            bool buttonReleased = !debounceMcp.channelHeld(ch);
+    // The timed slot has no button and is released after the minimum press time only.
+    for (uint8_t slot = 0; slot <= KEY_SLOT_TIMED; slot++) {
+        if (keyPressStates[slot].active) {
+            bool minTimeElapsed = (millis() - keyPressStates[slot].pressTime >= globalSettings.keyPressDurationMs);
+            bool buttonReleased = (slot == KEY_SLOT_TIMED) || !debounceMcp.channelHeld(slot);
             if (minTimeElapsed && buttonReleased) {
-                handleButtonRelease(&keyPressStates[ch].key);
-                keyPressStates[ch].active = false;
+                handleButtonRelease(&keyPressStates[slot].key);
+                keyPressStates[slot].active = false;
             }
         }
     }
@@ -850,7 +924,16 @@ void loop() {
         handleButtons();
     }
 
-    processSerialCommand();
+    // Process serial commands based on active protocol mode.
+    if (serialProtocolMode == PROTOCOL_BLAST) {
+        processBlastProtocol();
+    } else {
+        processSerialCommand();
+    }
+    handleProtocolModeTransitions();
+
+    // Update flash LED states (BLAST protocol flash command).
+    updateBlastFlash();
 
     // Update LED effects.
     ledUpdate();
