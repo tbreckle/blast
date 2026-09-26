@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-09-26
+
 ### Added
 - Firmware reloads the active profile when the app saves it, so changes apply without reselecting it (returns to the profile selection if the profile was deleted)
 
