@@ -403,7 +403,8 @@ void handleSaveProfile(const uint8_t* payload, uint16_t length) {
      * @param payload Pointer to payload containing index and profile data.
      * @param length Length of payload (must be ButtonMapping size + 1).
      *
-     * Saves profile to EEPROM and reloads menu display.
+     * Saves profile to EEPROM and reloads menu display. If the saved slot holds the
+     * active profile, the profile is reloaded so the changes apply immediately.
      */
     if (length != sizeof(ButtonMapping) + 1) {
         sendError(ERR_INVALID_LENGTH);
@@ -422,6 +423,9 @@ void handleSaveProfile(const uint8_t* payload, uint16_t length) {
 
     // Reload profiles to update menu display.
     reloadAllProfiles();
+    if (profileIndex == currentProfileIndex) {
+        reloadCurrentProfile();
+    }
 
     sendResponse(CMD_RESPONSE_OK, nullptr, 0);
 }

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-09-26
+
+### Added
+- Firmware reloads the active profile when the app saves it, so changes apply without reselecting it (returns to the profile selection if the profile was deleted)
+
+### Fixed
+- LEDs of action buttons A and B were swapped for both players
+
+### Changed
+- Profile editor labels the action buttons "A P1"/"B P1"/"A P2"/"B P2" instead of "Action P1.1"/"Action P1.2"/"Action P2.1"/"Action P2.2"
+
 ## [3.0.0] - 2026-09-26
 
 ### Added

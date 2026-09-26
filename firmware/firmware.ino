@@ -88,10 +88,10 @@ const uint8_t TLC_PIN_START_P1{1};
 const uint8_t TLC_PIN_START_P2{11};
 const uint8_t TLC_PIN_COIN_P1{2};
 const uint8_t TLC_PIN_COIN_P2{8};
-const uint8_t TLC_PIN_ACTION_P1_1{10};
-const uint8_t TLC_PIN_ACTION_P1_2{12};
-const uint8_t TLC_PIN_ACTION_P2_1{7};
-const uint8_t TLC_PIN_ACTION_P2_2{9};
+const uint8_t TLC_PIN_ACTION_P1_1{12};
+const uint8_t TLC_PIN_ACTION_P1_2{10};
+const uint8_t TLC_PIN_ACTION_P2_1{9};
+const uint8_t TLC_PIN_ACTION_P2_2{7};
 const uint8_t TLC_PIN_PAUSE{4};
 const uint8_t TLC_PIN_SAVE{5};
 const uint8_t TLC_PIN_LOAD{6};
@@ -542,6 +542,32 @@ void activateProfile(uint8_t index) {
     setMenuState(STATE_PROFILE);
     oldMenuState = STATE_NONE;
     handleMenuStateTransitions();
+}
+
+void reloadCurrentProfile() {
+    /**
+     * Reload the active profile from storage after its slot was saved.
+     *
+     * Only acts while a profile is active (profile or service menu). Stays in the current
+     * state and reapplies the profile LEDs, since keys may have been added or removed. If the
+     * slot is empty now (the profile was deleted), returns to the main menu.
+     */
+    if (currentMenuState != STATE_PROFILE && currentMenuState != STATE_SERVICEMENU) {
+        return;
+    }
+
+    if (!isProfileSlotUsed(currentProfileIndex)) {
+        currentProfileIndex = 0;
+        returnToMainMenu();
+        return;
+    }
+
+    loadProfile(currentProfileIndex, &currentProfile);
+    if (currentMenuState == STATE_PROFILE) {
+        oldMenuState = STATE_NONE;
+        handleMenuStateTransitions();
+    }
+    requestRedraw();
 }
 
 void returnToMainMenu() {

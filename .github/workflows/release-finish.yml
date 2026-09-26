@@ -98,6 +98,7 @@ jobs:
       # Creating the release also creates the tag vX.Y.Z on the merge commit. Steps are
       # idempotent, so a failed job can be re-run.
       - name: Create GitHub Release
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -146,9 +147,14 @@ jobs:
           # resolve, commit, push
           \`\`\`"
           fi
-          gh pr create --base develop --head "$branch" --title "Merge $VERSION back into develop" --body "$body"
+          if ! gh pr create --base develop --head "$branch" --title "Merge $VERSION back into develop" --body "$body"; then
+            echo "::error::Could not open the back-merge PR. Enable \"Allow GitHub Actions to create and approve pull requests\" or set RELEASE_TOKEN (see .github/WORKFLOWS.md), then re-run the job, or open it manually: $GITHUB_SERVER_URL/$GH_REPO/compare/develop...$branch"
+            exit 1
+          fi
 
+      # The release is published at this point, so the branch goes even if the back-merge PR failed.
       - name: Delete ${{ github.head_ref }}
+        if: ${{ !cancelled() && steps.release.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$HEAD_REF" || echo "Branch already deleted."

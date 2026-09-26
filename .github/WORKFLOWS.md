@@ -101,6 +101,10 @@ scripts/version.sh firmware-header "$(scripts/version.sh)" > firmware/version.h 
 ## Troubleshooting
 
 - **Release PR has no checks**: `RELEASE_TOKEN` is missing, see Repository setup.
+- **"GitHub Actions is not permitted to create or approve pull requests"**: `RELEASE_TOKEN` is
+  missing and the Actions setting from Repository setup step 2 is off. The branch is pushed
+  anyway: enable the setting (or add the token) and re-run the job, or open the PR from the link
+  in the error. For a back-merge, Release Finish still deletes the release/hotfix branch.
 - **Release Finish did not run**: the PR head must be `release/X.Y.Z` or `hotfix/X.Y.Z`, and the
   PR must be merged, not closed.
 - **"Tag vX.Y.Z already exists"**: the version was released already; start a new release.
