@@ -97,8 +97,8 @@ These are the TLC59711 channels in the firmware (1-indexed `TLC_PIN_*` constants
 |--------|----------|----------|
 | Start (`B3`) | 1 | 11 |
 | Coin (`B4`) | 2 | 8 |
-| Action A (`B5`) | 10 | 7 |
-| Action B (`B6`) | 12 | 9 |
+| Action A (`B5`) | 12 | 9 |
+| Action B (`B6`) | 10 | 7 |
 
 | Button (`B7`) | Channel |
 |---------------|---------|

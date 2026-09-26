@@ -29,6 +29,7 @@ void handleButtonPress(KeyCombo* key, uint8_t channel = 255);
 
 // Forward declarations for profile switching (defined in main file).
 void activateProfile(uint8_t index);
+void reloadCurrentProfile();
 void returnToMainMenu();
 
 // Function declarations.

@@ -90,6 +90,7 @@ jobs:
           VERSION: ${{ steps.branch.outputs.version }}
           BRANCH: ${{ steps.branch.outputs.branch }}
         run: |
+          trap 'echo "::error::Could not open the release PR. Enable \"Allow GitHub Actions to create and approve pull requests\" or set RELEASE_TOKEN (see .github/WORKFLOWS.md), or open it manually: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...$BRANCH"' ERR
           gh pr create --base main --head "$BRANCH" --title "Release $VERSION" --body "$(cat <<EOF
           Release **$VERSION** ($KIND).
 
