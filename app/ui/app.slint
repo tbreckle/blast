@@ -1,0 +1,697 @@
+// B.L.A.S.T. Configuration Tool UI.
+//
+// All state lives in Rust (src/ui.rs). This file only renders the properties it gets and
+// reports user actions through callbacks.
+
+import {
+    AboutSlint,
+    Button,
+    CheckBox,
+    ComboBox,
+    HorizontalBox,
+    LineEdit,
+    ListView,
+    Palette,
+    ScrollView,
+    Spinner,
+    VerticalBox,
+} from "std-widgets.slint";
+
+export struct ProfileRow {
+    name: string,
+    game-name: string,
+}
+
+export struct BindingRow {
+    label: string,
+    key-text: string,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    fkey: bool,
+    esc: bool,
+    // First row of a group of related buttons (adds some space above it).
+    group-start: bool,
+}
+
+// Modifier indices for BindingRow checkboxes, see modifier-toggled.
+export global Modifier {
+    out property <int> ctrl: 0;
+    out property <int> alt: 1;
+    out property <int> shift: 2;
+    out property <int> fkey: 3;
+    out property <int> esc: 4;
+}
+
+// Full-window backdrop that blocks input to the UI below and centers a dialog panel.
+component Modal inherits Rectangle {
+    in property <string> title;
+    in property <length> dialog-width: 420px;
+
+    background: #00000099;
+
+    // Swallow clicks on the backdrop.
+    TouchArea { }
+
+    Rectangle {
+        width: min(root.dialog-width, root.width - 32px);
+        height: min(content.preferred-height, root.height - 32px);
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        background: Palette.background;
+        border-color: Palette.border;
+        border-width: 1px;
+        border-radius: 8px;
+        clip: true;
+
+        content := VerticalBox {
+            if root.title != "": Text {
+                text: root.title;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            @children
+        }
+    }
+}
+
+// Yes/Cancel confirmation dialog.
+component ConfirmDialog inherits Modal {
+    in property <string> message;
+    callback confirmed();
+    callback cancelled();
+
+    Text {
+        text: root.message;
+        wrap: word-wrap;
+    }
+
+    HorizontalBox {
+        alignment: end;
+        padding: 0;
+        Button {
+            text: "Yes";
+            primary: true;
+            clicked => {
+                root.confirmed();
+            }
+        }
+
+        Button {
+            text: "Cancel";
+            clicked => {
+                root.cancelled();
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "B.L.A.S.T. Configuration Tool";
+    icon: @image-url("../../images/icon.png");
+    preferred-width: 1100px;
+    preferred-height: 850px;
+    min-width: 760px;
+    min-height: 480px;
+
+    // Application.
+    in property <string> app-version;
+
+    // Theme: 0 = System, 1 = Dark, 2 = Light.
+    in-out property <int> theme;
+
+    // Connection.
+    in property <[string]> port-labels;
+    in property <bool> has-ports;
+    in-out property <int> port-index;
+    in property <bool> connected;
+    in property <string> connected-port;
+    in property <string> firmware-version;
+    // App and firmware come from different releases.
+    in property <bool> firmware-mismatch;
+
+    // Profiles.
+    in property <[ProfileRow]> profiles;
+    in property <bool> dirty;
+
+    // Status bar message.
+    in property <string> message;
+    in property <bool> message-is-error;
+
+    // Background operation overlay.
+    in property <bool> busy;
+    in property <string> busy-message;
+
+    // Dialogs.
+    in property <bool> show-delete-confirmation;
+    in property <bool> show-reload-confirmation;
+    in-out property <bool> show-about;
+
+    // Profile editor.
+    in property <bool> editor-visible;
+    in property <string> editor-title;
+    in property <string> editor-confirm-label;
+    in property <bool> editor-can-save;
+    in property <string> editor-error;
+    in-out property <string> editor-name;
+    in-out property <string> editor-game-name;
+    in property <[BindingRow]> bindings;
+    // Index of the binding waiting for a key press, -1 if none.
+    in property <int> capturing-field: -1;
+    // Slightly compact sizing so the editor fits more rows.
+    property <length> editor-font-size: 13px;
+    property <length> editor-control-height: 30px;
+
+    callback refresh-ports();
+    callback connect(int);
+    callback disconnect();
+    callback reload();
+    callback save();
+    callback reboot();
+    callback theme-selected(int);
+
+    callback add-profile();
+    callback edit-profile(int);
+    callback duplicate-profile(int);
+    callback delete-profile(int);
+    callback move-profile-up(int);
+    callback move-profile-down(int);
+    callback confirm-delete();
+    callback cancel-delete();
+    callback confirm-reload();
+    callback cancel-reload();
+
+    callback editor-name-edited(string);
+    callback editor-game-name-edited(string);
+    callback start-capture(int);
+    callback key-captured(string);
+    callback modifier-toggled(int, int, bool);
+    callback editor-save();
+    callback editor-cancel();
+
+    function apply-theme() {
+        Palette.color-scheme = root.theme == 1 ? ColorScheme.dark : root.theme == 2 ? ColorScheme.light : ColorScheme.unknown;
+    }
+
+    init => {
+        root.apply-theme();
+    }
+    changed theme => {
+        root.apply-theme();
+    }
+
+    MenuBar {
+        Menu {
+            title: "Help";
+            MenuItem {
+                title: "About B.L.A.S.T.";
+                activated => {
+                    root.show-about = true;
+                }
+            }
+        }
+    }
+
+    VerticalLayout {
+        // Toolbar.
+        HorizontalBox {
+            Button {
+                text: "Reload";
+                enabled: root.connected && !root.busy;
+                clicked => {
+                    root.reload();
+                }
+            }
+
+            Button {
+                text: "Save Changes";
+                primary: root.dirty;
+                enabled: root.connected && root.dirty && !root.busy;
+                clicked => {
+                    root.save();
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            Button {
+                text: "Reboot Device";
+                enabled: root.connected && !root.busy;
+                clicked => {
+                    root.reboot();
+                }
+            }
+
+            Button {
+                text: "Refresh Ports";
+                enabled: !root.connected && !root.busy;
+                clicked => {
+                    root.refresh-ports();
+                }
+            }
+
+            ComboBox {
+                min-width: 280px;
+                model: root.port-labels;
+                current-index <=> root.port-index;
+                enabled: root.has-ports && !root.connected && !root.busy;
+            }
+
+            Button {
+                text: root.connected ? "Disconnect" : "Connect";
+                enabled: !root.busy && (root.connected || root.has-ports);
+                clicked => {
+                    if (root.connected) {
+                        root.disconnect();
+                    } else {
+                        root.connect(root.port-index);
+                    }
+                }
+            }
+        }
+
+        // Profile list.
+        VerticalBox {
+            vertical-stretch: 1;
+
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: "Profiles";
+                    font-size: 18px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    text: "Add New Profile";
+                    enabled: root.connected && !root.busy;
+                    clicked => {
+                        root.add-profile();
+                    }
+                }
+            }
+
+            if !root.connected: Text {
+                text: "Connect to a B.L.A.S.T. controller to manage its profiles.";
+                color: Palette.foreground.transparentize(0.4);
+            }
+
+            ListView {
+                vertical-stretch: 1;
+                for profile[index] in root.profiles: Rectangle {
+                    height: row.preferred-height + 6px;
+
+                    Rectangle {
+                        y: 3px;
+                        height: parent.height - 6px;
+                        background: Palette.alternate-background;
+                        border-color: Palette.border;
+                        border-width: 1px;
+                        border-radius: 6px;
+
+                        row := HorizontalBox {
+                            Button {
+                                text: "↑";
+                                enabled: index > 0;
+                                clicked => {
+                                    root.move-profile-up(index);
+                                }
+                            }
+
+                            Button {
+                                text: "↓";
+                                enabled: index < root.profiles.length - 1;
+                                clicked => {
+                                    root.move-profile-down(index);
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: profile.name;
+                                    font-weight: 600;
+                                    overflow: elide;
+                                }
+
+                                if profile.game-name != "": Text {
+                                    text: "Game: " + profile.game-name;
+                                    font-size: 12px;
+                                    color: Palette.foreground.transparentize(0.4);
+                                    overflow: elide;
+                                }
+                            }
+
+                            Button {
+                                text: "Edit";
+                                clicked => {
+                                    root.edit-profile(index);
+                                }
+                            }
+
+                            Button {
+                                text: "Duplicate";
+                                clicked => {
+                                    root.duplicate-profile(index);
+                                }
+                            }
+
+                            Button {
+                                text: "Delete";
+                                clicked => {
+                                    root.delete-profile(index);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Status bar.
+        Rectangle {
+            background: Palette.alternate-background;
+
+            HorizontalBox {
+                Text {
+                    text: root.connected ? "Status: Connected (" + root.connected-port + ")" : "Status: Disconnected";
+                    vertical-alignment: center;
+                }
+
+                if root.firmware-version != "" && !root.firmware-mismatch: Text {
+                    text: "Firmware: " + root.firmware-version;
+                    vertical-alignment: center;
+                }
+
+                if root.firmware-mismatch: Text {
+                    text: "⚠ Firmware " + root.firmware-version + " does not match app " + root.app-version;
+                    vertical-alignment: center;
+                    // Amber, readable on light and dark backgrounds.
+                    color: #d98200;
+                }
+
+                if root.dirty: Text {
+                    text: "● Unsaved changes";
+                    vertical-alignment: center;
+                    // Amber, readable on light and dark backgrounds.
+                    color: #d98200;
+                }
+
+                Text {
+                    text: root.message-is-error ? "Error: " + root.message : root.message;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    color: root.message-is-error ? #e5484d : Palette.foreground;
+                }
+
+                Text {
+                    text: "Theme:";
+                    vertical-alignment: center;
+                }
+
+                ComboBox {
+                    width: 140px;
+                    model: ["System", "Dark", "Light"];
+                    current-index <=> root.theme;
+                    selected => {
+                        root.theme-selected(self.current-index);
+                    }
+                }
+            }
+        }
+    }
+
+    // Dialogs (drawn on top of the main layout).
+    if root.show-delete-confirmation: ConfirmDialog {
+        title: "Confirm Delete";
+        message: "Are you sure you want to delete this profile?";
+        confirmed => {
+            root.confirm-delete();
+        }
+        cancelled => {
+            root.cancel-delete();
+        }
+    }
+
+    if root.show-reload-confirmation: ConfirmDialog {
+        title: "Confirm Reload";
+        message: "You have unsaved changes. Reload anyway?";
+        confirmed => {
+            root.confirm-reload();
+        }
+        cancelled => {
+            root.cancel-reload();
+        }
+    }
+
+    if root.editor-visible: Modal {
+        title: root.editor-title;
+        dialog-width: 760px;
+
+        // Receives the key press while a binding is being captured.
+        capture-scope := FocusScope {
+            key-pressed(event) => {
+                if (root.capturing-field >= 0) {
+                    root.key-captured(event.text);
+                    return accept;
+                }
+                return reject;
+            }
+
+            VerticalLayout {
+                spacing: 6px;
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    min-height: 200px;
+                    preferred-height: editor-content.preferred-height;
+
+                    editor-content := VerticalLayout {
+                        spacing: 4px;
+                        padding-right: 12px;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Profile Name:";
+                                font-size: root.editor-font-size;
+                                min-width: 110px;
+                                vertical-alignment: center;
+                            }
+
+                            LineEdit {
+                                height: root.editor-control-height;
+                                font-size: root.editor-font-size;
+                                text <=> root.editor-name;
+                                placeholder-text: "Max 16 characters";
+                                edited(text) => {
+                                    root.editor-name-edited(text);
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Game Name:";
+                                font-size: root.editor-font-size;
+                                min-width: 110px;
+                                vertical-alignment: center;
+                            }
+
+                            LineEdit {
+                                height: root.editor-control-height;
+                                font-size: root.editor-font-size;
+                                text <=> root.editor-game-name;
+                                placeholder-text: "MAMEHooker game name for BLx<game name>, max 29 characters (optional)";
+                                edited(text) => {
+                                    root.editor-game-name-edited(text);
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: "Key Bindings";
+                            font-size: 14px;
+                            font-weight: 700;
+                        }
+
+                        Text {
+                            text: "Click a button to capture a key. Press ESC to clear the binding. Use the checkboxes for modifiers.";
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+
+                        for binding[index] in root.bindings: VerticalLayout {
+                            padding-top: binding.group-start && index > 0 ? 6px : 0px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: binding.label;
+                                    font-size: root.editor-font-size;
+                                    min-width: 110px;
+                                    vertical-alignment: center;
+                                }
+
+                                Button {
+                                    width: 160px;
+                                    height: root.editor-control-height;
+                                    text: root.capturing-field == index ? "Press a key..." : binding.key-text;
+                                    primary: root.capturing-field == index;
+                                    clicked => {
+                                        root.start-capture(index);
+                                        capture-scope.focus();
+                                    }
+                                }
+
+                                CheckBox {
+                                    text: "Ctrl";
+                                    font-size: root.editor-font-size;
+                                    checked <=> binding.ctrl;
+                                    toggled => {
+                                        root.modifier-toggled(index, Modifier.ctrl, self.checked);
+                                    }
+                                }
+
+                                CheckBox {
+                                    text: "Alt";
+                                    font-size: root.editor-font-size;
+                                    checked <=> binding.alt;
+                                    toggled => {
+                                        root.modifier-toggled(index, Modifier.alt, self.checked);
+                                    }
+                                }
+
+                                CheckBox {
+                                    text: "Shift";
+                                    font-size: root.editor-font-size;
+                                    checked <=> binding.shift;
+                                    toggled => {
+                                        root.modifier-toggled(index, Modifier.shift, self.checked);
+                                    }
+                                }
+
+                                CheckBox {
+                                    text: "F-Key";
+                                    font-size: root.editor-font-size;
+                                    checked <=> binding.fkey;
+                                    toggled => {
+                                        root.modifier-toggled(index, Modifier.fkey, self.checked);
+                                    }
+                                }
+
+                                CheckBox {
+                                    text: "ESC";
+                                    font-size: root.editor-font-size;
+                                    checked <=> binding.esc;
+                                    toggled => {
+                                        root.modifier-toggled(index, Modifier.esc, self.checked);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.editor-error != "": Text {
+                    text: root.editor-error;
+                    color: #e5484d;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    Button {
+                        text: root.editor-confirm-label;
+                        primary: true;
+                        enabled: root.editor-can-save;
+                        clicked => {
+                            root.editor-save();
+                        }
+                    }
+
+                    Button {
+                        text: "Cancel";
+                        clicked => {
+                            root.editor-cancel();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.show-about: Modal {
+        title: "About B.L.A.S.T.";
+        dialog-width: 460px;
+
+        Image {
+            source: @image-url("../../images/logo.png");
+            height: self.width * self.source.height / self.source.width;
+        }
+
+        Text {
+            text: "B.L.A.S.T. Configuration Tool " + root.app-version;
+            font-weight: 600;
+        }
+
+        Text {
+            text: "Button Logic & Arcade Simulation Terminal.\nConfiguration tool for the B.L.A.S.T. arcade controller.\nLicensed under the MIT License.\nhttps://github.com/tbreckle/blast";
+            wrap: word-wrap;
+        }
+
+        AboutSlint { }
+
+        HorizontalLayout {
+            alignment: end;
+            Button {
+                text: "Close";
+                clicked => {
+                    root.show-about = false;
+                }
+            }
+        }
+    }
+
+    // Blocks all input while a background operation is running.
+    if root.busy: Rectangle {
+        background: #000000b4;
+
+        TouchArea { }
+
+        Rectangle {
+            width: busy-content.preferred-width;
+            height: busy-content.preferred-height;
+            background: Palette.background;
+            border-color: Palette.border;
+            border-width: 1px;
+            border-radius: 8px;
+
+            busy-content := VerticalBox {
+                padding: 20px;
+                alignment: center;
+                Spinner {
+                    indeterminate: true;
+                    min-width: 40px;
+                    min-height: 40px;
+                }
+
+                Text {
+                    text: root.busy-message;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}

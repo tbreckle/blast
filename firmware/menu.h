@@ -27,6 +27,10 @@ extern uint32_t splashStartTime;
 // channel: MCP channel (0-15) for hold tracking; 255 = no channel (fixed minimum-duration press).
 void handleButtonPress(KeyCombo* key, uint8_t channel = 255);
 
+// Forward declarations for profile switching (defined in main file).
+void activateProfile(uint8_t index);
+void returnToMainMenu();
+
 // Function declarations.
 void displayProfileSelect();
 void displayProfileMenu();

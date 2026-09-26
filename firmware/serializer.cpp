@@ -1,5 +1,7 @@
 #include "serializer.h"
 
+#include "blast_protocol.h"
+#include "menu.h"
 #include "storage.h"
 
 // RP2040 bootloader reboot flag.
@@ -512,10 +514,28 @@ void processSerialCommand() {
             handleRebootFlash();
             break;
 
+        case CMD_SWITCH_BLAST:
+            handleSwitchBlast();
+            break;
+
         default:
             sendError(ERR_INVALID_COMMAND);
             break;
     }
+}
+
+void handleSwitchBlast() {
+    /**
+     * Handle SWITCH_BLAST command.
+     *
+     * Sends confirmation response and switches serial protocol back to BLAST mode.
+     */
+    sendResponse(CMD_RESPONSE_OK, nullptr, 0);
+#ifdef DEBUG
+    Serial2.println("[SLIP] Switching to BLAST protocol.");
+#endif
+    serialProtocolMode = PROTOCOL_BLAST;
+    requestRedraw();
 }
 
 void handleRebootFlash() {

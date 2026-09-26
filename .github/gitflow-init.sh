@@ -78,6 +78,6 @@ echo "3. Start creating features with: git checkout -b feature/my-feature develo
 echo ""
 echo "📖 Quick Commands:"
 echo "   Feature:  git checkout -b feature/name develop"
-echo "   Release:  Use GitHub Actions → GitFlow Release workflow"
-echo "   Hotfix:   git checkout -b hotfix/version main"
+echo "   Release:  GitHub Actions → Release Start (kind: release)"
+echo "   Hotfix:   GitHub Actions → Release Start (kind: hotfix)"
 echo ""

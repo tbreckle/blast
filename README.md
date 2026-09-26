@@ -1,6 +1,12 @@
 # B.L.A.S.T. - Button Logic & Arcade Simulation Terminal
 
+<p align="center">
+  <img src="images/logo.png" alt="B.L.A.S.T. logo" width="600">
+</p>
+
 A comprehensive open-source arcade controller platform featuring customizable button mapping, LED control, and a modern configuration tool.
+
+[![CI](https://github.com/tbreckle/blast/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/tbreckle/blast/actions/workflows/ci.yml)
 
 ## Overview
 
@@ -19,7 +25,7 @@ B.L.A.S.T. is a complete arcade controller solution designed for retro gaming an
 - **USB & Wireless Support** - HID-compliant keyboard interface
 
 ### Software
-- **Configuration Tool** - Cross-platform Rust GUI application for easy setup
+- **Configuration Tool** - Cross-platform Rust GUI application built with [Slint](https://slint.dev) for easy setup
 - **Profile Management** - Save and load multiple button configurations
 - **Real-time Serial Communication** - Instant updates between device and computer
 - **Themeable UI** - Light/Dark/System theme support
@@ -36,9 +42,12 @@ blast/
 │   └── serializer.cpp # Serial communication protocol
 │
 ├── app/               # Rust configuration tool
+│   ├── ui/
+│   │   └── app.slint  # Slint user interface definition
 │   ├── src/
 │   │   ├── main.rs    # Application entry point
-│   │   ├── ui.rs      # egui-based user interface
+│   │   ├── ui.rs      # UI logic connecting app.slint to the device
+│   │   ├── keymap.rs  # Key capture for button bindings
 │   │   ├── protocol.rs # Serial protocol implementation
 │   │   └── types.rs   # Data structures
 │   └── Cargo.toml
@@ -46,28 +55,46 @@ blast/
 ├── pcb/               # KiCAD PCB designs
 │   └── blast/         # Main board schematic and layout
 │
+├── scripts/           # CI helpers: version.sh (SemVer from GitFlow), changelog.sh
+│
 └── CHANGELOG.md       # Release notes and version history
 ```
 
 ## Getting Started
 
+Prebuilt app binaries (Linux, Windows, macOS) and the firmware UF2 are attached to each
+[GitHub Release](https://github.com/tbreckle/blast/releases). Use app and firmware of the same
+release; the app warns in the status bar when the versions differ. Builds showing version
+`0.0.0+<commit>` are unofficial development builds (see [GITFLOW.md](GITFLOW.md#versioning)).
+
 ### Firmware Development
 
 **Requirements:**
 - Arduino IDE or PlatformIO
-- RP2040 Arduino core or equivalent
-- Libraries: Adafruit MCP23017, Adafruit SSD1306, HID Keyboard
+- [Arduino-Pico](https://github.com/earlephilhower/arduino-pico) board package by Earle F. Philhower, III — **version 6.1.1** is used
+  (Boards Manager URL: `https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json`)
+- Libraries (install via Library Manager or `arduino-cli lib install "<name>@<version>"`):
+
+  | Library | Version used |
+  |---------|--------------|
+  | Adafruit MCP23017 Arduino Library | 2.3.2 |
+  | Adafruit SSD1306 | 2.5.16 |
+  | Adafruit GFX Library | 1.12.4 |
+  | Adafruit BusIO | 1.17.4 |
+
+  Wire, SPI, EEPROM, Keyboard, HID_Keyboard and tusb-hid are bundled with the Arduino-Pico core.
 
 **Building:**
 1. Open `firmware/firmware.ino` in Arduino IDE
-2. Select RP2040/RP2350 board from Tools menu
+2. Select RP2040/RP2350 board (Arduino-Pico core) from Tools menu
 3. Compile and upload to device
 
 ### Configuration Tool
 
 **Requirements:**
-- Rust 1.70+
+- Rust 1.92+ (required by Slint 1.18)
 - Cargo
+- Linux only: `libudev-dev` (serial port access), `libfontconfig-dev` (fonts) and `pkg-config`
 
 **Building & Running:**
 ```bash
@@ -95,6 +122,8 @@ Communication between firmware and configuration tool uses a custom protocol ove
 
 See `app/src/protocol.rs` for detailed protocol specification.
 
+Host software (e.g. games or output tools) can control the button LEDs through the simple line-based **BLAST protocol** on the same serial port. See [firmware/BLAST_PROTOCOL.md](firmware/BLAST_PROTOCOL.md).
+
 ## Configuration & Profiles
 
 ### Button Mapping
@@ -111,6 +140,12 @@ For version history and release notes, see [CHANGELOG.md](CHANGELOG.md).
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+### Made with Slint
+
+<a href="https://slint.dev"><img src="https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png" alt="Made with Slint" height="60"></a>
+
+The configuration tool's user interface is built with [Slint](https://slint.dev), used under the [Slint Royalty-free Desktop, Mobile, and Web Applications License 2.0](https://github.com/slint-ui/slint/blob/master/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md). The app also shows the Slint attribution under **Help → About B.L.A.S.T.**
 
 ## Contributing
 

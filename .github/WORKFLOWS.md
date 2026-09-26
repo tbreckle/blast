@@ -1,235 +1,109 @@
 # GitHub Actions & CI/CD
 
-This directory contains GitHub Actions workflows for B.L.A.S.T. automated building, testing, and release management.
+GitHub Actions workflows for building, testing and releasing B.L.A.S.T. The branching model is
+GitFlow (see [GITFLOW.md](../GITFLOW.md)), versions are SemVer and computed by
+[`scripts/version.sh`](../scripts/version.sh).
+
+## Versioning
+
+No version is committed: `app/Cargo.toml` and `firmware/version.h` stay at `0.0.0`. Every build
+gets its version injected:
+
+| Branch / ref | Version |
+|---|---|
+| tag `vX.Y.Z` (official release, built by Release Finish) | `X.Y.Z` |
+| `release/X.Y.Z`, `hotfix/X.Y.Z` (and their PRs) | `X.Y.Z-rc.N` (N = commits since the branch left `main`) |
+| `develop`, `feature/*`, `bugfix/*`, anything else | `0.0.0+<sha>` (unofficial) |
+
+- App: `BLAST_VERSION` env var → `build.rs` → `env!("BLAST_VERSION")` (About dialog, version check)
+- Firmware: `scripts/version.sh firmware-header <version> > firmware/version.h` before compiling
+  (`CMD_GET_VERSION`, splash screen). Only `X.Y.Z` fits the protocol; the full string is on the splash screen.
 
 ## Workflows
 
-### 1. App Build (`app-build.yml`)
+### 1. CI (`ci.yml`)
 
-**Purpose**: Build and test the Rust configuration tool
+**Triggers**: push to `develop`, `feature/**`, `bugfix/**`, `release/**`, `hotfix/**`; PRs to
+`main`/`develop`; manual. No path filters, so required status checks always report.
 
-**Triggers**:
-- Push to `main`, `develop`, feature/*, release/* branches
-- Pull requests to `main` or `develop`
-- Changes in `app/` directory
+**Jobs**: `Version` (runs `version.sh`), then `Build` (the reusable `build.yml`).
 
-**Jobs**:
-- **build**: Compiles release binary on Linux, Windows, macOS
-  - Runs cargo build and tests
-  - Caches dependencies for speed
-  - Uploads platform-specific artifacts
-- **clippy**: Lint checks with Clippy
-  - Ensures code quality
-  - Fails on warnings
-- **fmt**: Code formatting check
-  - Ensures consistent style
+### 2. Build (`build.yml`, reusable)
 
-**Artifacts**:
-- `blast-linux` - Linux executable
-- `blast-windows` - Windows executable (.exe)
-- `blast-macos` - macOS executable
+Called by CI and Release Finish with a `version` (and optionally a `ref`).
 
----
+| Job | What it does | Artifact |
+|---|---|---|
+| App (linux-x86_64) | test + build | `blast-app-<version>-linux-x86_64.tar.gz` |
+| App (windows-x86_64) | test + build | `blast-app-<version>-windows-x86_64.zip` |
+| App (macos-universal) | test + build for arm64 and x86_64, `lipo` | `blast-app-<version>-macos-universal.tar.gz` |
+| Clippy | `cargo clippy -D warnings` | |
+| Format | `cargo fmt --check` | |
+| Firmware | Arduino CLI build (FQBN from `.vscode/arduino.json`, core 6.1.1) | `blast-firmware-<version>.uf2` |
+| Firmware Lint | cppcheck | |
+| Scripts | shellcheck + `scripts/test.sh` | |
 
-### 2. Firmware Build (`firmware-build.yml`)
+### 3. Release Start (`release-start.yml`)
 
-**Purpose**: Compile and verify the Arduino firmware
+**Trigger**: manual (Actions → Release Start → Run workflow).
 
-**Triggers**:
-- Push to `main`, `develop`, feature/*, release/* branches
-- Pull requests to `main` or `develop`
-- Changes in `firmware/` or `pcb/` directories
+**Inputs**: `kind` = `release` (from `develop`) or `hotfix` (from `main`, always a patch bump);
+`bump` = `major`/`minor`/`patch`.
 
-**Jobs**:
-- **build**: Compiles Arduino sketch for RP2040
-  - Uses Arduino CLI
-  - Installs required cores and libraries
-  - Generates UF2 binary
-- **lint**: C++ code linting
-  - Runs cppcheck
-  - Fails on lint errors
+**Steps**: next version from the latest `vX.Y.Z` tag → branch `release/X.Y.Z` or `hotfix/X.Y.Z`
+→ CHANGELOG `[Unreleased]` becomes `[X.Y.Z] - date` (`scripts/changelog.sh release`) → PR to `main`.
 
-**Artifacts**:
-- `firmware-uf2` - UF2 firmware image (ready for upload to device)
+### 4. Release Finish (`release-finish.yml`)
 
-**Dependencies**:
-- Arduino CLI
-- Raspberry Pi RP2040 core
-- Required libraries (Adafruit_*, etc.)
-
----
-
-### 3. Release Workflow (`release.yml`)
-
-**Purpose**: Orchestrate the release process following GitFlow
-
-**Triggers**:
-- Manual workflow dispatch via GitHub Actions interface
-- Input parameters:
-  - `version`: Target version (e.g., 1.0.0)
-  - `release_type`: major/minor/patch
+**Trigger**: a `release/*` or `hotfix/*` PR is merged into `main`.
 
 **Steps**:
-1. Validates version format (semantic versioning)
-2. Creates `release/X.Y.Z` branch from `develop`
-3. Updates version in:
-   - `app/Cargo.toml`
-   - `firmware/firmware.ino` (if version defined)
-4. Commits version bump
-5. Creates pull request to `main`
-6. Builds release artifacts on all platforms
+1. Version from the branch name, fails if the tag exists already
+2. Build `X.Y.Z` from the merge commit (`build.yml`)
+3. GitHub Release `vX.Y.Z` (creates the tag on the merge commit) with all artifacts, `SHA256SUMS`,
+   and notes from the CHANGELOG section plus GitHub's generated PR list
+4. Back-merge PR into `develop` from `backmerge/X.Y.Z` (the merge commit with `develop` merged
+   in, so the PR is up to date). On a merge conflict, the branch is pushed without the merge and
+   the PR describes how to resolve it.
+5. Deletes the release/hotfix branch
 
-**Outputs**:
-- Pull request ready for merge
-- Release artifacts for all platforms
-- Version bumps committed
+Publishing steps are idempotent, so a failed `Publish` job can be re-run.
 
----
+## Repository setup
 
-### 4. Auto-Tag & Release (`tag-release.yml`)
+1. **`main` branch**: must exist (created from `develop` for the first release) together with the
+   baseline tag `v1.0.0`.
+2. **Settings → Actions → General**: "Workflow permissions" read, and enable "Allow GitHub
+   Actions to create and approve pull requests".
+3. **Settings → General → Pull Requests**: allow merge commits. Release and back-merge PRs must be
+   merged with **Create a merge commit**; squash/rebase breaks the GitFlow history.
+4. **`RELEASE_TOKEN` secret (recommended)**: branches and PRs created with `GITHUB_TOKEN` don't
+   trigger workflows, so CI would not run on the release and back-merge PRs, and their required
+   checks would never report. Add a fine-grained PAT (or a GitHub App token) for this repository
+   with *Contents* and *Pull requests* read/write. Without it, the workflows fall back to
+   `GITHUB_TOKEN`; close and reopen the PR to start CI.
+5. **Branch protection**: see [branch-protection.conf](branch-protection.conf) for the required
+   status checks.
 
-**Purpose**: Finalize release by tagging and creating GitHub Release
-
-**Triggers**:
-- PR merge to `main` from `release/` branch
-
-**Steps**:
-1. Creates annotated git tag (`vX.Y.Z`)
-2. Merges release branch back to `develop`
-3. Creates GitHub Release with changelog reference
-4. Cleans up (can delete release branch)
-
-**Outputs**:
-- Version tag pushed to repository
-- GitHub Release created
-- Changes merged back to develop
-
----
-
-## Quick Start
-
-### Setting Up Branch Protection
-
-Set up branch protection rules in GitHub Settings for `main` and `develop`:
+## Local use
 
 ```bash
-# Using GitHub CLI:
-gh api repos/{owner}/{repo}/branches/main/protection \
-  -f required_status_checks='{"strict":true}' \
-  -f enforce_admins=true \
-  -f required_pull_request_reviews='{"required_approving_review_count":1}' \
-  -f dismiss_stale_reviews=true
+scripts/version.sh                  # version of the current checkout
+scripts/version.sh next minor       # next release version
+scripts/test.sh                     # tests for version.sh and changelog.sh
+scripts/changelog.sh notes 1.0.0    # release notes of a version
+
+# Build with an injected version
+cd app && BLAST_VERSION=$(../scripts/version.sh) cargo build --release
+scripts/version.sh firmware-header "$(scripts/version.sh)" > firmware/version.h   # don't commit this
 ```
-
-Or manually in GitHub Settings:
-1. Go to Settings → Branches
-2. Add rule for `main`
-3. Require 1 PR review
-4. Require status checks to pass
-5. Require branches up to date
-6. Repeat for `develop`
-
-### Creating a Release
-
-1. Go to Actions tab
-2. Select "GitFlow Release" workflow
-3. Click "Run workflow"
-4. Enter version (e.g., 1.0.0) and release type
-5. Workflow creates PR to main
-6. Review and merge PR
-7. Tag and release created automatically
-
-### Manual Release Process
-
-If workflows need adjustment:
-
-```bash
-# 1. Create release branch
-git checkout develop
-git pull origin develop
-git checkout -b release/1.0.0
-
-# 2. Update versions
-# Edit app/Cargo.toml and firmware/firmware.ino
-
-# 3. Commit and push
-git add .
-git commit -m "chore: release 1.0.0"
-git push -u origin release/1.0.0
-
-# 4. Create PR to main on GitHub
-
-# 5. After merge, tag locally or via tag-release workflow
-git tag -a v1.0.0 -m "Release 1.0.0"
-git push origin v1.0.0
-
-# 6. Merge back to develop
-git checkout develop
-git merge main
-git push origin develop
-```
-
----
-
-## Status Badges
-
-Add these to README.md:
-
-```markdown
-[![Build App](https://github.com/username/blast/actions/workflows/app-build.yml/badge.svg)](https://github.com/username/blast/actions/workflows/app-build.yml)
-[![Build Firmware](https://github.com/username/blast/actions/workflows/firmware-build.yml/badge.svg)](https://github.com/username/blast/actions/workflows/firmware-build.yml)
-```
-
----
 
 ## Troubleshooting
 
-### Build Failures
-
-**App build fails**:
-- Check Rust version: `rustup update`
-- Verify dependencies: `cargo check`
-- Check for clippy issues: `cargo clippy`
-
-**Firmware build fails**:
-- Verify Arduino libraries are installed
-- Check RP2040 core is installed
-- Review Arduino CLI output in logs
-
-### Workflow Not Triggering
-
-- Verify branch names match trigger conditions
-- Check file paths in `paths` filters
-- Ensure branch is not protected from CI workflows
-- Review GitHub Settings → Actions permissions
-
-### Artifact Not Found
-
-- Check job succeeded (review logs)
-- Verify artifact path matches uploaded location
-- Artifacts are retained for 30 days by default
-
----
-
-## Customization
-
-To modify workflows:
-
-1. Edit `.github/workflows/*.yml` files
-2. Refer to [GitHub Actions Documentation](https://docs.github.com/en/actions)
-3. Test changes in a feature branch
-4. Common customizations:
-   - Add new build platforms
-   - Change artifact retention
-   - Add Slack/Discord notifications
-   - Add deployment steps
-
----
-
-## References
-
-- [GitHub Actions Documentation](https://docs.github.com/en/actions)
-- [Workflow Syntax Reference](https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions)
-- [Semantic Versioning](https://semver.org/)
-- [Keep a Changelog](https://keepachangelog.com/)
-- [GitFlow Workflow](https://nvie.com/posts/a-successful-git-branching-model/)
+- **Release PR has no checks**: `RELEASE_TOKEN` is missing, see Repository setup.
+- **Release Finish did not run**: the PR head must be `release/X.Y.Z` or `hotfix/X.Y.Z`, and the
+  PR must be merged, not closed.
+- **"Tag vX.Y.Z already exists"**: the version was released already; start a new release.
+- **Back-merge conflicts**: resolve on `backmerge/X.Y.Z` as described in the PR. Usually
+  CHANGELOG.md: keep new `develop` entries under `[Unreleased]`.
+- **Firmware build fails**: check that the core/library versions in `build.yml` match README.md.

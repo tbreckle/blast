@@ -19,6 +19,7 @@ pub const CMD_GET_PROFILE_COUNT: u8 = 0x06;
 pub const CMD_SAVE_PROFILE: u8 = 0x07;
 pub const CMD_GET_MAX_PROFILES: u8 = 0x08;
 pub const CMD_REBOOT_FLASH: u8 = 0x09;
+pub const CMD_SWITCH_BLAST: u8 = 0x0A;
 pub const CMD_RESPONSE_OK: u8 = 0x10;
 pub const CMD_RESPONSE_ERROR: u8 = 0x11;
 
@@ -201,6 +202,44 @@ impl FirmwareConnection {
                 }
             }
         }
+    }
+
+    /// Send BLAST protocol command "B+\n" to switch firmware from BLAST to SLIP mode.
+    /// Must be called before any SLIP communication.
+    pub fn enable_slip_mode(&mut self) -> Result<()> {
+        println!("[CMD] Switching firmware to SLIP mode (sending B+)...");
+        self.port
+            .write_all(b"B+\n")
+            .context("Failed to send BLAST mode switch command")?;
+        self.port.flush().context("Failed to flush serial port")?;
+        // Allow firmware to process the mode switch.
+        std::thread::sleep(Duration::from_millis(50));
+        // Discard any data the firmware may have echoed.
+        let _ = self.port.clear(serialport::ClearBuffer::Input);
+        self.recv_buffer.clear();
+        println!("[CMD] SLIP mode enabled\n");
+        Ok(())
+    }
+
+    /// Send SLIP command to switch firmware back to BLAST protocol mode.
+    /// Should be called before disconnecting.
+    pub fn switch_to_blast(&mut self) -> Result<()> {
+        println!("[CMD] Switching firmware back to BLAST mode...");
+        let frame = Frame::new(CMD_SWITCH_BLAST, vec![]);
+        self.send_frame(&frame)?;
+
+        let response = self.receive_frame(Duration::from_secs(2))?;
+
+        if response.command == CMD_RESPONSE_ERROR {
+            let error_code = response.payload.first().copied().unwrap_or(0);
+            anyhow::bail!("Firmware returned error: 0x{:02X}", error_code);
+        }
+
+        if response.command != CMD_RESPONSE_OK {
+            anyhow::bail!("Unexpected response command: 0x{:02X}", response.command);
+        }
+        println!("[CMD] BLAST mode restored\n");
+        Ok(())
     }
 
     /// Get firmware version

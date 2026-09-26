@@ -1,13 +1,19 @@
+use crate::keymap::{apply_captured_key, CaptureResult};
 use crate::protocol::FirmwareConnection;
 use crate::types::{
     ButtonMapping, FirmwareVersion, KeyCombo, MOD_ALT, MOD_CTRL, MOD_ESC, MOD_F, MOD_SHIFT,
 };
-use eframe::egui;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serialport::{SerialPortInfo, SerialPortType};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+slint::include_modules!();
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum Theme {
@@ -18,45 +24,100 @@ pub enum Theme {
 }
 
 impl Theme {
-    fn as_str(&self) -> &'static str {
+    /// Index in the theme ComboBox (see `theme` in app.slint).
+    fn index(self) -> i32 {
         match self {
-            Theme::System => "System",
-            Theme::Dark => "Dark",
-            Theme::Light => "Light",
+            Theme::System => 0,
+            Theme::Dark => 1,
+            Theme::Light => 2,
+        }
+    }
+
+    fn from_index(index: i32) -> Self {
+        match index {
+            1 => Theme::Dark,
+            2 => Theme::Light,
+            _ => Theme::System,
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct ThemeConfig {
     theme: Theme,
 }
 
-impl Default for ThemeConfig {
-    fn default() -> Self {
-        ThemeConfig {
-            theme: Theme::System,
-        }
+/// Key binding rows of the profile editor: label and whether it starts a new group.
+const BINDING_ROWS: [(&str, bool); 16] = [
+    ("Start P1:", true),
+    ("Start P2:", false),
+    ("Coin P1:", true),
+    ("Coin P2:", false),
+    ("Action P1.1:", true),
+    ("Action P1.2:", false),
+    ("Action P2.1:", false),
+    ("Action P2.2:", false),
+    ("Service P1:", true),
+    ("Service P2:", false),
+    ("Test P1:", true),
+    ("Test P2:", false),
+    ("Pause:", true),
+    ("Save:", false),
+    ("Load:", false),
+    ("Exit:", false),
+];
+
+/// Key combo of a profile for a row index of BINDING_ROWS.
+fn binding_mut(profile: &mut ButtonMapping, index: usize) -> Option<&mut KeyCombo> {
+    match index {
+        0 => Some(&mut profile.start_p1),
+        1 => Some(&mut profile.start_p2),
+        2 => Some(&mut profile.coin_p1),
+        3 => Some(&mut profile.coin_p2),
+        4 => Some(&mut profile.action_p1_1),
+        5 => Some(&mut profile.action_p1_2),
+        6 => Some(&mut profile.action_p2_1),
+        7 => Some(&mut profile.action_p2_2),
+        8 => Some(&mut profile.service_p1),
+        9 => Some(&mut profile.service_p2),
+        10 => Some(&mut profile.test_p1),
+        11 => Some(&mut profile.test_p2),
+        12 => Some(&mut profile.pause),
+        13 => Some(&mut profile.save),
+        14 => Some(&mut profile.load),
+        15 => Some(&mut profile.exit),
+        _ => None,
     }
 }
 
-// Field indices for key capture.
-const FIELD_START_P1: usize = 0;
-const FIELD_START_P2: usize = 1;
-const FIELD_COIN_P1: usize = 2;
-const FIELD_COIN_P2: usize = 3;
-const FIELD_ACTION_P1_1: usize = 4;
-const FIELD_ACTION_P1_2: usize = 5;
-const FIELD_ACTION_P2_1: usize = 6;
-const FIELD_ACTION_P2_2: usize = 7;
-const FIELD_SERVICE_P1: usize = 8;
-const FIELD_SERVICE_P2: usize = 9;
-const FIELD_TEST_P1: usize = 10;
-const FIELD_TEST_P2: usize = 11;
-const FIELD_PAUSE: usize = 12;
-const FIELD_SAVE: usize = 13;
-const FIELD_LOAD: usize = 14;
-const FIELD_EXIT: usize = 15;
+/// Modifier flag for a checkbox index (see the Modifier global in app.slint).
+fn modifier_flag(index: i32) -> Option<u8> {
+    match index {
+        0 => Some(MOD_CTRL),
+        1 => Some(MOD_ALT),
+        2 => Some(MOD_SHIFT),
+        3 => Some(MOD_F),
+        4 => Some(MOD_ESC),
+        _ => None,
+    }
+}
+
+/// App version, injected by build.rs (see scripts/version.sh).
+const APP_VERSION: &str = env!("BLAST_VERSION");
+
+/// Whether app and firmware come from different releases. Unofficial builds (0.0.0) on either
+/// side are never flagged, and pre-release/build suffixes of the app version are ignored.
+fn is_firmware_version_mismatch(app_version: &str, firmware: &FirmwareVersion) -> bool {
+    let app_core = app_version.split(['-', '+']).next().unwrap_or_default();
+    let firmware = firmware.to_string();
+    app_core != "0.0.0" && firmware != "0.0.0" && app_core != firmware
+}
+
+/// Maximum time to wait for a running background operation when the app closes.
+const EXIT_SYNC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Interval for checking whether a background operation has finished.
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 enum SyncResult {
     Connected {
@@ -79,99 +140,451 @@ enum SyncResult {
     },
 }
 
-pub struct BlastApp {
+/// Profile editor state (only present while the editor is open).
+struct EditorState {
+    profile: ButtonMapping,
+    editing_idx: Option<usize>,
+    capturing_field: Option<usize>,
+    error: Option<String>,
+}
+
+#[derive(Default)]
+struct AppState {
     // Connection state.
     serial_ports: Vec<SerialPortInfo>,
-    selected_port: Option<String>,
+    connected_port: Option<String>,
     connection: Option<FirmwareConnection>,
     firmware_version: Option<FirmwareVersion>,
 
     // Profile data.
     profiles: Vec<ButtonMapping>,
-    selected_profile_idx: Option<usize>,
     is_dirty: bool,
 
-    // UI state.
-    is_syncing: bool,
-    sync_message: String,
+    // Background operation: status message and result channel.
+    busy_message: Option<String>,
     pending_result: Option<mpsc::Receiver<SyncResult>>,
-    show_profile_editor: bool,
-    show_delete_confirmation: bool,
-    show_reload_confirmation: bool,
+
+    // Dialogs.
     delete_profile_idx: Option<usize>,
-    editing_profile_idx: Option<usize>,
-    editor_profile: ButtonMapping,
+    show_reload_confirmation: bool,
+    editor: Option<EditorState>,
 
-    // Profile editor state.
-    capturing_field: Option<usize>,
-    error_message: Option<String>,
+    // Status bar message and whether it is an error.
+    message: Option<(String, bool)>,
 
-    // Theme state.
     theme: Theme,
 }
 
-impl Default for BlastApp {
-    fn default() -> Self {
-        let serial_ports = serialport::available_ports().unwrap_or_default();
+impl AppState {
+    fn set_error(&mut self, message: impl Into<String>) {
+        self.message = Some((message.into(), true));
+    }
 
-        // Load theme from config
-        let theme = confy::load::<ThemeConfig>("blast", "config")
-            .ok()
-            .map(|config| config.theme)
-            .unwrap_or(Theme::System);
+    fn set_info(&mut self, message: impl Into<String>) {
+        self.message = Some((message.into(), false));
+    }
 
-        Self {
-            serial_ports,
-            selected_port: None,
-            connection: None,
-            firmware_version: None,
-            profiles: Vec::new(),
-            selected_profile_idx: None,
-            is_dirty: false,
-            is_syncing: false,
-            sync_message: String::new(),
-            pending_result: None,
-            show_profile_editor: false,
-            show_delete_confirmation: false,
-            show_reload_confirmation: false,
-            delete_profile_idx: None,
-            editing_profile_idx: None,
-            editor_profile: ButtonMapping::default(),
-            capturing_field: None,
-            error_message: None,
-            theme,
+    fn disconnect(&mut self) {
+        // Switch firmware back to BLAST protocol before dropping the connection.
+        if let Some(conn) = self.connection.as_mut() {
+            if let Err(e) = conn.switch_to_blast() {
+                eprintln!("Warning: Failed to switch back to BLAST mode: {}", e);
+            }
         }
+        self.connection = None;
+        self.connected_port = None;
+        self.firmware_version = None;
+        self.profiles.clear();
+        self.is_dirty = false;
+        self.editor = None;
+        self.delete_profile_idx = None;
+        self.show_reload_confirmation = false;
+    }
+
+    fn apply_sync_result(&mut self, result: SyncResult) {
+        self.pending_result = None;
+        self.busy_message = None;
+        match result {
+            SyncResult::Connected {
+                connection,
+                profiles,
+                version,
+                port_name,
+            } => {
+                self.connection = Some(connection);
+                self.profiles = profiles;
+                self.firmware_version = Some(version);
+                self.connected_port = Some(port_name);
+                self.is_dirty = false;
+            }
+            SyncResult::Reloaded {
+                connection,
+                profiles,
+            } => {
+                self.connection = Some(connection);
+                self.profiles = profiles;
+                self.is_dirty = false;
+            }
+            SyncResult::Saved { connection } => {
+                self.connection = Some(connection);
+                self.is_dirty = false;
+                self.set_info("Profiles saved.");
+            }
+            SyncResult::Rebooted => {
+                self.disconnect();
+                self.set_info("Device reboot command sent.");
+            }
+            SyncResult::Error {
+                connection,
+                message,
+            } => {
+                self.connection = connection;
+                if self.connection.is_none() {
+                    self.connected_port = None;
+                }
+                self.set_error(message);
+            }
+        }
+    }
+
+    fn move_profile_up(&mut self, idx: usize) {
+        if idx > 0 && idx < self.profiles.len() {
+            self.profiles.swap(idx - 1, idx);
+            self.is_dirty = true;
+        }
+    }
+
+    fn move_profile_down(&mut self, idx: usize) {
+        if idx + 1 < self.profiles.len() {
+            self.profiles.swap(idx, idx + 1);
+            self.is_dirty = true;
+        }
+    }
+
+    fn delete_profile(&mut self, idx: usize) {
+        if idx < self.profiles.len() {
+            self.profiles.remove(idx);
+            self.is_dirty = true;
+        }
+    }
+
+    fn duplicate_profile(&mut self, idx: usize) {
+        if let Some(profile) = self.profiles.get(idx) {
+            let mut new_profile = *profile;
+            new_profile.set_name(&format!("{} (Copy)", profile.name_str()));
+            // Game names must be unique, so the copy starts without one.
+            new_profile.set_game_name("");
+            // Insert the duplicated profile right after the original.
+            self.profiles.insert(idx + 1, new_profile);
+            self.is_dirty = true;
+        }
+    }
+
+    /// Validate and store the edited profile. Returns false if the editor stays open.
+    fn save_edited_profile(&mut self) -> bool {
+        let Some(editor) = self.editor.as_mut() else {
+            return false;
+        };
+
+        if editor.profile.name_str().trim().is_empty() {
+            editor.error = Some("Profile name cannot be empty.".to_string());
+            return false;
+        }
+
+        // Game names must be unique, otherwise only the first matching profile is reachable.
+        let game_name = editor.profile.game_name_str();
+        if !game_name.is_empty() {
+            let duplicate = self.profiles.iter().enumerate().find(|(idx, profile)| {
+                Some(*idx) != editor.editing_idx && profile.game_name_str() == game_name
+            });
+            if let Some((_, profile)) = duplicate {
+                editor.error = Some(format!(
+                    "Game name \"{}\" is already used by profile \"{}\".",
+                    game_name,
+                    profile.name_str()
+                ));
+                return false;
+            }
+        }
+
+        let profile = editor.profile;
+        match editor.editing_idx {
+            Some(idx) if idx < self.profiles.len() => self.profiles[idx] = profile,
+            Some(_) => {}
+            None => self.profiles.push(profile),
+        }
+        self.is_dirty = true;
+        self.editor = None;
+        true
     }
 }
 
-impl BlastApp {
-    fn refresh_ports(&mut self) {
-        self.serial_ports = serialport::available_ports().unwrap_or_default();
+/// USB product name and VID/PID reported by the firmware (see USB.setProduct/setVIDPID in
+/// firmware.ino).
+const BLAST_PRODUCT_NAME: &str = "B.L.A.S.T.";
+const BLAST_USB_ID: (u16, u16) = (0xF144, 0x0001);
+
+/// Index of the port to preselect: the first USB device named "B.L.A.S.T.", otherwise the
+/// first one with the B.L.A.S.T. VID/PID (Windows may report a generic driver name instead).
+fn blast_port_index(ports: &[SerialPortInfo]) -> Option<usize> {
+    let usb_info = |port: &SerialPortInfo| match &port.port_type {
+        SerialPortType::UsbPort(info) => Some(info.clone()),
+        _ => None,
+    };
+    ports
+        .iter()
+        .position(|port| {
+            usb_info(port)
+                .and_then(|info| info.product)
+                .is_some_and(|product| product.contains(BLAST_PRODUCT_NAME))
+        })
+        .or_else(|| {
+            ports.iter().position(|port| {
+                usb_info(port).is_some_and(|info| (info.vid, info.pid) == BLAST_USB_ID)
+            })
+        })
+}
+
+/// Label for a serial port in the port ComboBox. USB ports end in `[VID:PID]`, because Windows
+/// reports every CDC device as "USB Serial Device" and the ID is the only way to tell them apart.
+fn port_label(port: &SerialPortInfo) -> String {
+    match &port.port_type {
+        SerialPortType::UsbPort(info) => {
+            let id = format!("[{:04X}:{:04X}]", info.vid, info.pid);
+            match info.product.as_deref().or(info.manufacturer.as_deref()) {
+                Some(name) => format!("{} ({}) {}", port.port_name, name, id),
+                None => format!("{} {}", port.port_name, id),
+            }
+        }
+        _ => port.port_name.clone(),
+    }
+}
+
+/// Update a model in place: rows are only replaced when they changed, so the UI keeps focus
+/// and state of unchanged rows.
+fn sync_model<T: Clone + PartialEq + 'static>(model: &VecModel<T>, items: Vec<T>) {
+    if model.row_count() == items.len() {
+        for (i, item) in items.into_iter().enumerate() {
+            if model.row_data(i).as_ref() != Some(&item) {
+                model.set_row_data(i, item);
+            }
+        }
+    } else {
+        model.set_vec(items);
+    }
+}
+
+/// Connects the Slint UI to the application state.
+struct Controller {
+    ui: slint::Weak<AppWindow>,
+    state: RefCell<AppState>,
+    port_model: Rc<VecModel<SharedString>>,
+    profile_model: Rc<VecModel<ProfileRow>>,
+    binding_model: Rc<VecModel<BindingRow>>,
+    poll_timer: Timer,
+}
+
+impl Controller {
+    /// Push the application state to the UI.
+    fn refresh(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let st = self.state.borrow();
+
+        // Connection.
+        let labels: Vec<SharedString> = if st.serial_ports.is_empty() {
+            vec!["No device found".into()]
+        } else {
+            st.serial_ports
+                .iter()
+                .map(|port| port_label(port).into())
+                .collect()
+        };
+        sync_model(&self.port_model, labels);
+        ui.set_has_ports(!st.serial_ports.is_empty());
+        if ui.get_port_index() as usize >= self.port_model.row_count() {
+            ui.set_port_index(0);
+        }
+        ui.set_connected(st.connected_port.is_some());
+        ui.set_connected_port(st.connected_port.clone().unwrap_or_default().into());
+        ui.set_firmware_version(
+            st.firmware_version
+                .as_ref()
+                .map(|v| v.to_string())
+                .unwrap_or_default()
+                .into(),
+        );
+        ui.set_firmware_mismatch(
+            st.firmware_version
+                .as_ref()
+                .is_some_and(|v| is_firmware_version_mismatch(APP_VERSION, v)),
+        );
+
+        // Profiles.
+        let rows = st
+            .profiles
+            .iter()
+            .map(|p| ProfileRow {
+                name: p.name_str().into(),
+                game_name: p.game_name_str().into(),
+            })
+            .collect();
+        sync_model(&self.profile_model, rows);
+        ui.set_dirty(st.is_dirty);
+
+        // Status and background operation.
+        let (message, is_error) = st.message.clone().unwrap_or_default();
+        ui.set_message(message.into());
+        ui.set_message_is_error(is_error);
+        ui.set_busy(st.busy_message.is_some());
+        ui.set_busy_message(st.busy_message.clone().unwrap_or_default().into());
+
+        // Dialogs.
+        ui.set_show_delete_confirmation(st.delete_profile_idx.is_some());
+        ui.set_show_reload_confirmation(st.show_reload_confirmation);
+
+        // Profile editor.
+        ui.set_editor_visible(st.editor.is_some());
+        if let Some(editor) = &st.editor {
+            let is_new = editor.editing_idx.is_none();
+            ui.set_editor_title(
+                if is_new {
+                    "New Profile"
+                } else {
+                    "Edit Profile"
+                }
+                .into(),
+            );
+            ui.set_editor_confirm_label(if is_new { "Add" } else { "Save" }.into());
+            ui.set_editor_can_save(!editor.profile.name_str().trim().is_empty());
+            ui.set_editor_error(editor.error.clone().unwrap_or_default().into());
+            ui.set_capturing_field(editor.capturing_field.map_or(-1, |i| i as i32));
+
+            let mut profile = editor.profile;
+            let rows = BINDING_ROWS
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (label, group_start))| {
+                    let combo = *binding_mut(&mut profile, i)?;
+                    Some(BindingRow {
+                        label: (*label).into(),
+                        key_text: combo.display().into(),
+                        ctrl: combo.modifiers & MOD_CTRL != 0,
+                        alt: combo.modifiers & MOD_ALT != 0,
+                        shift: combo.modifiers & MOD_SHIFT != 0,
+                        fkey: combo.modifiers & MOD_F != 0,
+                        esc: combo.modifiers & MOD_ESC != 0,
+                        group_start: *group_start,
+                    })
+                })
+                .collect();
+            sync_model(&self.binding_model, rows);
+        }
     }
 
-    fn connect_to_port(&mut self, port_name: String) {
-        self.is_syncing = true;
-        self.sync_message = "Connecting to device...".to_string();
-        self.error_message = None;
-
-        let port_name_clone = port_name.clone();
+    /// Run `job` on a background thread while the busy overlay is shown.
+    fn start_operation(
+        self: &Rc<Self>,
+        message: &str,
+        job: impl FnOnce() -> SyncResult + Send + 'static,
+    ) {
         let (tx, rx) = mpsc::channel();
-        self.pending_result = Some(rx);
-
+        {
+            let mut st = self.state.borrow_mut();
+            st.busy_message = Some(message.to_string());
+            st.message = None;
+            st.pending_result = Some(rx);
+        }
         thread::spawn(move || {
+            let _ = tx.send(job());
+        });
+
+        let weak = Rc::downgrade(self);
+        self.poll_timer
+            .start(TimerMode::Repeated, POLL_INTERVAL, move || {
+                if let Some(controller) = weak.upgrade() {
+                    controller.poll_pending_result();
+                }
+            });
+        self.refresh();
+    }
+
+    fn poll_pending_result(&self) {
+        let received = {
+            let st = self.state.borrow();
+            let Some(rx) = st.pending_result.as_ref() else {
+                self.poll_timer.stop();
+                return;
+            };
+            match rx.try_recv() {
+                Ok(result) => Some(Ok(result)),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(())),
+            }
+        };
+
+        let Some(received) = received else {
+            return;
+        };
+        self.poll_timer.stop();
+        {
+            let mut st = self.state.borrow_mut();
+            match received {
+                Ok(result) => st.apply_sync_result(result),
+                Err(()) => {
+                    // Thread dropped sender without sending (e.g. panic).
+                    st.pending_result = None;
+                    st.busy_message = None;
+                    st.set_error("Operation failed unexpectedly.");
+                }
+            }
+        }
+        self.refresh();
+    }
+
+    fn refresh_ports(&self) {
+        self.state.borrow_mut().serial_ports = serialport::available_ports().unwrap_or_default();
+        self.refresh();
+        self.select_blast_port();
+    }
+
+    /// Preselect a connected B.L.A.S.T. controller in the port ComboBox.
+    fn select_blast_port(&self) {
+        let index = blast_port_index(&self.state.borrow().serial_ports);
+        if let (Some(index), Some(ui)) = (index, self.ui.upgrade()) {
+            ui.set_port_index(index as i32);
+        }
+    }
+
+    fn connect(self: &Rc<Self>, port_index: usize) {
+        let port_name = {
+            let st = self.state.borrow();
+            match st.serial_ports.get(port_index) {
+                Some(port) => port.port_name.clone(),
+                None => return,
+            }
+        };
+
+        self.start_operation("Connecting to device...", move || {
             let result = (|| -> Result<(FirmwareConnection, Vec<ButtonMapping>, FirmwareVersion), String> {
-                let port = serialport::new(&port_name_clone, 115200)
+                let port = serialport::new(&port_name, 115200)
                     .timeout(Duration::from_millis(100))
+                    // The Arduino-Pico core drops all USB serial output while DTR is low.
+                    // Linux raises DTR on open anyway, but on Windows serialport clears it.
+                    .dtr_on_open(true)
                     .open()
                     .map_err(|e| format!("Failed to open port: {}", e))?;
 
                 // Flush stale data and give device time to stabilize after port open.
-                // On Windows, opening a COM port asserts DTR which resets Arduino/Pico devices.
                 let _ = port.clear(serialport::ClearBuffer::All);
                 thread::sleep(Duration::from_millis(500));
                 let _ = port.clear(serialport::ClearBuffer::Input);
 
                 let mut conn = FirmwareConnection::new(port);
+
+                conn.enable_slip_mode()
+                    .map_err(|e| format!("Failed to switch to SLIP mode: {}", e))?;
 
                 let version = conn.get_version()
                     .map_err(|e| format!("Failed to read firmware version: {}", e))?;
@@ -182,7 +595,7 @@ impl BlastApp {
                 Ok((conn, profiles, version))
             })();
 
-            let _ = tx.send(match result {
+            match result {
                 Ok((connection, profiles, version)) => SyncResult::Connected {
                     connection,
                     profiles,
@@ -193,946 +606,514 @@ impl BlastApp {
                     connection: None,
                     message,
                 },
-            });
+            }
         });
     }
 
-    fn disconnect(&mut self) {
-        self.connection = None;
-        self.selected_port = None;
-        self.firmware_version = None;
-        self.profiles.clear();
-        self.is_dirty = false;
+    fn disconnect(&self) {
+        self.state.borrow_mut().disconnect();
+        self.refresh();
     }
 
-    fn reload_data(&mut self) {
-        if let Some(conn) = self.connection.take() {
-            self.is_syncing = true;
-            self.sync_message = "Reloading data...".to_string();
-            self.error_message = None;
-
-            let (tx, rx) = mpsc::channel();
-            self.pending_result = Some(rx);
-
-            thread::spawn(move || {
-                let mut conn = conn;
-                let _ = tx.send(match conn.get_all_profiles() {
-                    Ok(profiles) => SyncResult::Reloaded {
-                        connection: conn,
-                        profiles,
-                    },
-                    Err(e) => SyncResult::Error {
-                        connection: Some(conn),
-                        message: format!("Failed to reload profiles: {}", e),
-                    },
-                });
-            });
-        }
-    }
-
-    fn save_data(&mut self) {
-        if let Some(conn) = self.connection.take() {
-            self.is_syncing = true;
-            self.sync_message = "Saving profiles...".to_string();
-            self.error_message = None;
-
-            let profiles = self.profiles.clone();
-            let (tx, rx) = mpsc::channel();
-            self.pending_result = Some(rx);
-
-            thread::spawn(move || {
-                let mut conn = conn;
-                let result = (|| -> Result<(), String> {
-                    let max_profiles = conn
-                        .get_max_profiles()
-                        .map_err(|e| format!("Failed to query max profiles: {}", e))?
-                        as usize;
-
-                    for (idx, profile) in profiles.iter().enumerate() {
-                        if idx >= max_profiles {
-                            return Err(format!(
-                                "Too many profiles: {} exceeds firmware limit of {}.",
-                                profiles.len(),
-                                max_profiles
-                            ));
-                        }
-                        conn.save_profile(idx as u8, profile)
-                            .map_err(|e| format!("Failed to save profile {}: {}", idx, e))?;
-                    }
-
-                    for idx in profiles.len()..max_profiles {
-                        let empty_profile = ButtonMapping::default();
-                        conn.save_profile(idx as u8, &empty_profile)
-                            .map_err(|e| format!("Failed to clear profile slot {}: {}", idx, e))?;
-                    }
-
-                    Ok(())
-                })();
-
-                let _ = tx.send(match result {
-                    Ok(()) => SyncResult::Saved { connection: conn },
-                    Err(message) => SyncResult::Error {
-                        connection: Some(conn),
-                        message,
-                    },
-                });
-            });
-        }
-    }
-
-    fn reboot_device(&mut self) {
-        if let Some(conn) = self.connection.take() {
-            self.is_syncing = true;
-            self.sync_message = "Rebooting device...".to_string();
-            self.error_message = None;
-
-            let (tx, rx) = mpsc::channel();
-            self.pending_result = Some(rx);
-
-            thread::spawn(move || {
-                let mut conn = conn;
-                let _ = tx.send(match conn.reboot_flash() {
-                    Ok(_) => SyncResult::Rebooted,
-                    Err(e) => SyncResult::Error {
-                        connection: Some(conn),
-                        message: format!("Failed to reboot device: {}", e),
-                    },
-                });
-            });
-        }
-    }
-
-    fn poll_pending_result(&mut self) {
-        if let Some(rx) = &self.pending_result {
-            match rx.try_recv() {
-                Ok(result) => {
-                    self.pending_result = None;
-                    self.is_syncing = false;
-                    match result {
-                        SyncResult::Connected {
-                            connection,
-                            profiles,
-                            version,
-                            port_name,
-                        } => {
-                            self.connection = Some(connection);
-                            self.profiles = profiles;
-                            self.firmware_version = Some(version);
-                            self.selected_port = Some(port_name);
-                            self.is_dirty = false;
-                        }
-                        SyncResult::Reloaded {
-                            connection,
-                            profiles,
-                        } => {
-                            self.connection = Some(connection);
-                            self.profiles = profiles;
-                            self.is_dirty = false;
-                        }
-                        SyncResult::Saved { connection } => {
-                            self.connection = Some(connection);
-                            self.is_dirty = false;
-                        }
-                        SyncResult::Rebooted => {
-                            self.disconnect();
-                            self.error_message = Some("Device reboot command sent.".to_string());
-                        }
-                        SyncResult::Error {
-                            connection,
-                            message,
-                        } => {
-                            self.connection = connection;
-                            self.error_message = Some(message);
-                        }
-                    }
-                }
-                Err(mpsc::TryRecvError::Empty) => {
-                    // Still waiting — nothing to do.
-                }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    // Thread dropped sender without sending (e.g. panic).
-                    self.pending_result = None;
-                    self.is_syncing = false;
-                    self.error_message = Some("Operation failed unexpectedly.".to_string());
-                }
-            }
-        }
-    }
-
-    fn move_profile_up(&mut self, idx: usize) {
-        if idx > 0 && idx < self.profiles.len() {
-            self.profiles.swap(idx - 1, idx);
-            self.is_dirty = true;
-            if let Some(selected) = self.selected_profile_idx {
-                if selected == idx {
-                    self.selected_profile_idx = Some(idx - 1);
-                } else if selected == idx - 1 {
-                    self.selected_profile_idx = Some(idx);
-                }
-            }
-        }
-    }
-
-    fn move_profile_down(&mut self, idx: usize) {
-        if idx < self.profiles.len() - 1 {
-            self.profiles.swap(idx, idx + 1);
-            self.is_dirty = true;
-            if let Some(selected) = self.selected_profile_idx {
-                if selected == idx {
-                    self.selected_profile_idx = Some(idx + 1);
-                } else if selected == idx + 1 {
-                    self.selected_profile_idx = Some(idx);
-                }
-            }
-        }
-    }
-
-    fn delete_profile(&mut self, idx: usize) {
-        if idx < self.profiles.len() {
-            self.profiles.remove(idx);
-            self.is_dirty = true;
-            if let Some(selected) = self.selected_profile_idx {
-                if selected == idx {
-                    self.selected_profile_idx = None;
-                } else if selected > idx {
-                    self.selected_profile_idx = Some(selected - 1);
-                }
-            }
-        }
-    }
-
-    fn duplicate_profile(&mut self, idx: usize) {
-        if idx < self.profiles.len() {
-            let mut new_profile = self.profiles[idx];
-            // Append "(Copy)" to the profile name
-            let current_name = new_profile.name_str();
-            let new_name = format!("{} (Copy)", current_name);
-            // Truncate to 16 characters max (17 bytes - 1 for null terminator)
-            let truncated_name = if new_name.len() > 16 {
-                &new_name[..16]
-            } else {
-                &new_name
-            };
-            // Clear the name field and set the new name
-            new_profile.name = [0; 17];
-            for (i, &byte) in truncated_name.as_bytes().iter().enumerate() {
-                if i < 16 {
-                    new_profile.name[i] = byte;
-                }
-            }
-            // Insert the duplicated profile right after the original
-            self.profiles.insert(idx + 1, new_profile);
-            self.is_dirty = true;
-            if let Some(selected) = self.selected_profile_idx {
-                if selected > idx {
-                    self.selected_profile_idx = Some(selected + 1);
-                }
-            }
-        }
-    }
-
-    fn add_new_profile(&mut self) {
-        self.editor_profile = ButtonMapping::default();
-        self.editing_profile_idx = None;
-        self.show_profile_editor = true;
-        self.capturing_field = None;
-    }
-
-    fn edit_profile(&mut self, idx: usize) {
-        if idx < self.profiles.len() {
-            self.editor_profile = self.profiles[idx];
-            self.editing_profile_idx = Some(idx);
-            self.show_profile_editor = true;
-            self.capturing_field = None;
-        }
-    }
-
-    fn save_edited_profile(&mut self) {
-        // Check if name is empty (all zeros or whitespace).
-        let name = self.editor_profile.name_str();
-        let name_str = name.trim();
-        if name_str.is_empty() {
-            self.error_message = Some("Profile name cannot be empty".to_string());
+    fn reload(self: &Rc<Self>) {
+        let Some(mut conn) = self.state.borrow_mut().connection.take() else {
             return;
-        }
+        };
+        self.start_operation("Reloading data...", move || match conn.get_all_profiles() {
+            Ok(profiles) => SyncResult::Reloaded {
+                connection: conn,
+                profiles,
+            },
+            Err(e) => SyncResult::Error {
+                connection: Some(conn),
+                message: format!("Failed to reload profiles: {}", e),
+            },
+        });
+    }
 
-        if let Some(idx) = self.editing_profile_idx {
-            if idx < self.profiles.len() {
-                self.profiles[idx] = self.editor_profile;
-            }
+    fn request_reload(self: &Rc<Self>) {
+        let is_dirty = self.state.borrow().is_dirty;
+        if is_dirty {
+            self.state.borrow_mut().show_reload_confirmation = true;
+            self.refresh();
         } else {
-            self.profiles.push(self.editor_profile);
-        }
-        self.is_dirty = true;
-        self.show_profile_editor = false;
-    }
-
-    fn get_key_combo_mut(&mut self, field_idx: usize) -> Option<&mut KeyCombo> {
-        match field_idx {
-            FIELD_START_P1 => Some(&mut self.editor_profile.start_p1),
-            FIELD_START_P2 => Some(&mut self.editor_profile.start_p2),
-            FIELD_COIN_P1 => Some(&mut self.editor_profile.coin_p1),
-            FIELD_COIN_P2 => Some(&mut self.editor_profile.coin_p2),
-            FIELD_ACTION_P1_1 => Some(&mut self.editor_profile.action_p1_1),
-            FIELD_ACTION_P1_2 => Some(&mut self.editor_profile.action_p1_2),
-            FIELD_ACTION_P2_1 => Some(&mut self.editor_profile.action_p2_1),
-            FIELD_ACTION_P2_2 => Some(&mut self.editor_profile.action_p2_2),
-            FIELD_SERVICE_P1 => Some(&mut self.editor_profile.service_p1),
-            FIELD_SERVICE_P2 => Some(&mut self.editor_profile.service_p2),
-            FIELD_TEST_P1 => Some(&mut self.editor_profile.test_p1),
-            FIELD_TEST_P2 => Some(&mut self.editor_profile.test_p2),
-            FIELD_PAUSE => Some(&mut self.editor_profile.pause),
-            FIELD_SAVE => Some(&mut self.editor_profile.save),
-            FIELD_LOAD => Some(&mut self.editor_profile.load),
-            FIELD_EXIT => Some(&mut self.editor_profile.exit),
-            _ => None,
+            self.reload();
         }
     }
 
-    fn render_key_binding_row(&mut self, ui: &mut egui::Ui, label: &str, field_idx: usize) {
-        ui.horizontal(|ui| {
-            ui.add_sized([100.0, 0.0], egui::Label::new(label));
-            ui.add_space(10.0);
-
-            // Check if we're capturing this field.
-            let is_capturing = self.capturing_field == Some(field_idx);
-
-            // Get current combo display text and capturing state.
-            let (button_text, mut ctrl, mut alt, mut shift, mut f_key, mut esc) =
-                if let Some(combo) = self.get_key_combo_mut(field_idx) {
-                    let text = if is_capturing {
-                        "Press a key...".to_string()
-                    } else {
-                        combo.display()
-                    };
-                    let ctrl = combo.modifiers & MOD_CTRL != 0;
-                    let alt = combo.modifiers & MOD_ALT != 0;
-                    let shift = combo.modifiers & MOD_SHIFT != 0;
-                    let f_key = combo.modifiers & MOD_F != 0;
-                    let esc = combo.modifiers & MOD_ESC != 0;
-                    (text, ctrl, alt, shift, f_key, esc)
-                } else {
-                    return;
-                };
-
-            // Key capture button.
-            let button = egui::Button::new(button_text).min_size(egui::vec2(150.0, 0.0));
-            if ui.add(button).clicked() {
-                self.capturing_field = Some(field_idx);
-            }
-
-            // Modifier checkboxes.
-            ui.checkbox(&mut ctrl, "Ctrl").on_hover_text("Control key");
-            ui.checkbox(&mut alt, "Alt").on_hover_text("Alt key");
-            ui.checkbox(&mut shift, "Shift").on_hover_text("Shift key");
-            ui.checkbox(&mut f_key, "F-Key")
-                .on_hover_text("Function key (F1-F24)");
-            ui.checkbox(&mut esc, "ESC").on_hover_text("Escape key");
-
-            // Update modifiers based on checkbox values.
-            if let Some(combo) = self.get_key_combo_mut(field_idx) {
-                combo.modifiers = 0;
-                if ctrl {
-                    combo.modifiers |= MOD_CTRL;
-                }
-                if alt {
-                    combo.modifiers |= MOD_ALT;
-                }
-                if shift {
-                    combo.modifiers |= MOD_SHIFT;
-                }
-                if f_key {
-                    combo.modifiers |= MOD_F;
-                }
-                if esc {
-                    combo.modifiers |= MOD_ESC;
-                }
-            }
-        });
-    }
-
-    fn render_top_panel(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                // Reload button.
-                ui.add_enabled_ui(self.connection.is_some() && !self.is_syncing, |ui| {
-                    if ui.button("🔄 Reload").clicked() {
-                        if self.is_dirty {
-                            self.show_reload_confirmation = true;
-                        } else {
-                            self.reload_data();
-                        }
-                    }
-                });
-
-                // Save button.
-                ui.add_enabled_ui(
-                    self.connection.is_some() && self.is_dirty && !self.is_syncing,
-                    |ui| {
-                        if ui.button("💾 Save Changes").clicked() {
-                            self.save_data();
-                        }
-                    },
-                );
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Serial port dropdown.
-                    egui::ComboBox::from_label("Serial Port")
-                        .selected_text(self.selected_port.as_deref().unwrap_or(
-                            if self.serial_ports.is_empty() {
-                                "No device found"
-                            } else {
-                                "Select port..."
-                            },
-                        ))
-                        .show_ui(ui, |ui| {
-                            if self.connection.is_some()
-                                && ui.selectable_label(false, "Disconnect").clicked()
-                            {
-                                self.disconnect();
-                            }
-
-                            if self.serial_ports.is_empty() {
-                                ui.label("No device found");
-                            } else {
-                                let mut port_to_connect = None;
-                                for port in &self.serial_ports {
-                                    let label = match &port.port_type {
-                                        SerialPortType::UsbPort(info) => {
-                                            let name = info
-                                                .product
-                                                .as_deref()
-                                                .or(info.manufacturer.as_deref())
-                                                .map(|s| s.to_string())
-                                                .unwrap_or_else(|| {
-                                                    format!(
-                                                        "VID:{:04X} PID:{:04X}",
-                                                        info.vid, info.pid
-                                                    )
-                                                });
-                                            format!("{} ({})", port.port_name, name)
-                                        }
-                                        _ => port.port_name.clone(),
-                                    };
-
-                                    if ui.selectable_label(false, label).clicked() {
-                                        port_to_connect = Some(port.port_name.clone());
-                                    }
-                                }
-                                if let Some(port_name) = port_to_connect {
-                                    self.connect_to_port(port_name);
-                                }
-                            }
-                        });
-
-                    // Refresh button.
-                    if ui.button("🔄").on_hover_text("Refresh ports").clicked() {
-                        self.refresh_ports();
-                    }
-
-                    // Reboot button.
-                    ui.add_enabled_ui(self.connection.is_some() && !self.is_syncing, |ui| {
-                        if ui.button("🔁 Reboot Device").clicked() {
-                            self.reboot_device();
-                            self.disconnect();
-                        }
-                    });
-                });
-            });
-        });
-    }
-
-    fn render_status_bar(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let status_text = if self.connection.is_some() {
-                    "Connected"
-                } else {
-                    "Disconnected"
-                };
-
-                ui.label(format!("Status: {}", status_text));
-
-                if let Some(version) = &self.firmware_version {
-                    ui.separator();
-                    ui.label(format!("Firmware: {}", version));
-                }
-
-                if self.is_dirty {
-                    ui.separator();
-                    let unsaved_color = match self.theme {
-                        Theme::Light => egui::Color32::from_rgb(200, 100, 0),
-                        _ => egui::Color32::YELLOW,
-                    };
-                    ui.colored_label(unsaved_color, "● Unsaved changes");
-                }
-
-                if let Some(error) = &self.error_message {
-                    ui.separator();
-                    ui.colored_label(egui::Color32::RED, format!("Error: {}", error));
-                }
-
-                // Add space to push theme selector to the right
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let theme_options = [Theme::System, Theme::Dark, Theme::Light];
-                    let theme_labels = ["System", "Dark", "Light"];
-
-                    let mut selected_theme = self.theme;
-                    egui::ComboBox::from_label("Theme")
-                        .selected_text(self.theme.as_str())
-                        .show_ui(ui, |ui| {
-                            for (theme, label) in theme_options.iter().zip(theme_labels.iter()) {
-                                if ui
-                                    .selectable_value(&mut selected_theme, *theme, *label)
-                                    .clicked()
-                                {
-                                    self.theme = selected_theme;
-                                    // Save theme to config
-                                    let config = ThemeConfig { theme: self.theme };
-                                    let _ = confy::store("blast", "config", config);
-                                    // Apply the theme
-                                    self.apply_theme(ctx);
-                                }
-                            }
-                        });
-                });
-            });
-        });
-    }
-
-    pub fn apply_theme(&self, ctx: &egui::Context) {
-        let visuals = match self.theme {
-            Theme::System => {
-                if ctx.style().visuals.dark_mode {
-                    egui::Visuals::dark()
-                } else {
-                    egui::Visuals::light()
-                }
-            }
-            Theme::Dark => egui::Visuals::dark(),
-            Theme::Light => egui::Visuals::light(),
+    fn save(self: &Rc<Self>) {
+        let (conn, profiles) = {
+            let mut st = self.state.borrow_mut();
+            let Some(conn) = st.connection.take() else {
+                return;
+            };
+            (conn, st.profiles.clone())
         };
 
-        ctx.set_visuals(visuals);
-    }
+        self.start_operation("Saving profiles...", move || {
+            let mut conn = conn;
+            let result = (|| -> Result<(), String> {
+                let max_profiles = conn
+                    .get_max_profiles()
+                    .map_err(|e| format!("Failed to query max profiles: {}", e))?
+                    as usize;
 
-    fn render_profile_list(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            // Disable UI while syncing.
-            ui.add_enabled_ui(!self.is_syncing, |ui| {
-                // Profile list.
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.heading("Profiles");
+                if profiles.len() > max_profiles {
+                    return Err(format!(
+                        "Too many profiles: {} exceeds firmware limit of {}.",
+                        profiles.len(),
+                        max_profiles
+                    ));
+                }
 
-                    ui.add_space(10.0);
+                for (idx, profile) in profiles.iter().enumerate() {
+                    conn.save_profile(idx as u8, profile)
+                        .map_err(|e| format!("Failed to save profile {}: {}", idx, e))?;
+                }
 
-                    if ui
-                        .add_enabled(
-                            self.connection.is_some(),
-                            egui::Button::new("➕ Add New Profile"),
-                        )
-                        .clicked()
-                    {
-                        self.add_new_profile();
-                    }
+                for idx in profiles.len()..max_profiles {
+                    let empty_profile = ButtonMapping::default();
+                    conn.save_profile(idx as u8, &empty_profile)
+                        .map_err(|e| format!("Failed to clear profile slot {}: {}", idx, e))?;
+                }
 
-                    ui.add_space(10.0);
+                Ok(())
+            })();
 
-                    let idx_to_delete = None;
-                    let mut idx_to_move_up = None;
-                    let mut idx_to_move_down = None;
-                    let mut idx_to_edit = None;
-                    let mut idx_to_duplicate: Option<usize> = None;
-
-                    for (idx, profile) in self.profiles.iter().enumerate() {
-                        ui.group(|ui| {
-                            ui.horizontal(|ui| {
-                                // Move up button.
-                                if ui
-                                    .add_enabled(idx > 0, egui::Button::new("⬆"))
-                                    .on_hover_text("Move up")
-                                    .clicked()
-                                {
-                                    idx_to_move_up = Some(idx);
-                                }
-
-                                // Move down button.
-                                if ui
-                                    .add_enabled(
-                                        idx < self.profiles.len() - 1,
-                                        egui::Button::new("⬇"),
-                                    )
-                                    .on_hover_text("Move down")
-                                    .clicked()
-                                {
-                                    idx_to_move_down = Some(idx);
-                                }
-
-                                // Profile name.
-                                ui.label(profile.name_str());
-
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        // Delete button.
-                                        if ui.button("🗑").on_hover_text("Delete").clicked() {
-                                            self.delete_profile_idx = Some(idx);
-                                            self.show_delete_confirmation = true;
-                                        }
-
-                                        // Duplicate button.
-                                        if ui.button("📋").on_hover_text("Duplicate").clicked() {
-                                            idx_to_duplicate = Some(idx);
-                                        }
-
-                                        // Edit button.
-                                        if ui.button("✏").on_hover_text("Edit").clicked() {
-                                            idx_to_edit = Some(idx);
-                                        }
-                                    },
-                                );
-                            });
-                        });
-                    }
-
-                    // Handle deferred actions.
-                    if let Some(idx) = idx_to_move_up {
-                        self.move_profile_up(idx);
-                    }
-                    if let Some(idx) = idx_to_move_down {
-                        self.move_profile_down(idx);
-                    }
-                    if let Some(idx) = idx_to_edit {
-                        self.edit_profile(idx);
-                    }
-                    if let Some(idx) = idx_to_duplicate {
-                        self.duplicate_profile(idx);
-                    }
-                    if let Some(idx) = idx_to_delete {
-                        self.delete_profile(idx);
-                    }
-                });
-            });
+            match result {
+                Ok(()) => SyncResult::Saved { connection: conn },
+                Err(message) => SyncResult::Error {
+                    connection: Some(conn),
+                    message,
+                },
+            }
         });
     }
 
-    fn render_syncing_overlay(&self, ctx: &egui::Context) {
-        if self.is_syncing {
-            let screen_rect = ctx.screen_rect();
+    fn reboot(self: &Rc<Self>) {
+        let Some(mut conn) = self.state.borrow_mut().connection.take() else {
+            return;
+        };
+        self.start_operation("Rebooting device...", move || match conn.reboot_flash() {
+            Ok(_) => SyncResult::Rebooted,
+            Err(e) => SyncResult::Error {
+                connection: Some(conn),
+                message: format!("Failed to reboot device: {}", e),
+            },
+        });
+    }
 
-            // Full-screen semi-transparent backdrop that captures all input.
-            egui::Area::new(egui::Id::new("syncing_overlay_backdrop"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(screen_rect.min)
-                .show(ctx, |ui| {
-                    let response =
-                        ui.allocate_response(screen_rect.size(), egui::Sense::click_and_drag());
-                    let painter = ui.painter();
-                    painter.rect_filled(response.rect, 0.0, egui::Color32::from_black_alpha(180));
-                });
-
-            // Centered message and spinner on top.
-            egui::Area::new(egui::Id::new("syncing_overlay_content"))
-                .order(egui::Order::Foreground)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.spinner();
-                            ui.add_space(8.0);
-                            ui.label(&self.sync_message);
-                        });
-                    });
-                });
+    fn theme_selected(&self, index: i32) {
+        let theme = Theme::from_index(index);
+        self.state.borrow_mut().theme = theme;
+        if let Err(e) = confy::store("blast", "config", ThemeConfig { theme }) {
+            eprintln!("Warning: Failed to store theme: {}", e);
         }
     }
 
-    fn render_delete_confirmation(&mut self, ctx: &egui::Context) {
-        if self.show_delete_confirmation {
-            egui::Window::new("Confirm Delete")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label("Are you sure you want to delete this profile?");
-                    ui.horizontal(|ui| {
-                        if ui.button("Yes").clicked() {
-                            if let Some(idx) = self.delete_profile_idx {
-                                self.delete_profile(idx);
-                            }
-                            self.show_delete_confirmation = false;
-                            self.delete_profile_idx = None;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.show_delete_confirmation = false;
-                            self.delete_profile_idx = None;
-                        }
-                    });
-                });
-        }
+    /// Apply a change to the state and refresh the UI.
+    fn update(&self, change: impl FnOnce(&mut AppState)) {
+        change(&mut self.state.borrow_mut());
+        self.refresh();
     }
 
-    fn render_reload_confirmation(&mut self, ctx: &egui::Context) {
-        if self.show_reload_confirmation {
-            egui::Window::new("Confirm Reload")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label("You have unsaved changes. Reload anyway?");
-                    ui.horizontal(|ui| {
-                        if ui.button("Yes").clicked() {
-                            self.reload_data();
-                            self.show_reload_confirmation = false;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.show_reload_confirmation = false;
-                        }
-                    });
-                });
-        }
-    }
-
-    fn render_profile_editor(&mut self, ctx: &egui::Context) {
-        if self.show_profile_editor && !self.is_syncing {
-            let title = if self.editing_profile_idx.is_some() {
-                "Edit Profile"
-            } else {
-                "New Profile"
+    fn open_editor(&self, editing_idx: Option<usize>) {
+        let profile = {
+            let mut st = self.state.borrow_mut();
+            let profile = match editing_idx {
+                Some(idx) => match st.profiles.get(idx) {
+                    Some(profile) => *profile,
+                    None => return,
+                },
+                None => ButtonMapping::default(),
             };
+            st.editor = Some(EditorState {
+                profile,
+                editing_idx,
+                capturing_field: None,
+                error: None,
+            });
+            profile
+        };
 
-            egui::Window::new(title)
-                .collapsible(false)
-                .resizable(true)
-                .default_width(700.0)
-                .default_height(650.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        // Profile name input.
-                        ui.horizontal(|ui| {
-                            ui.label("Profile Name:");
-                            let name_str = self.editor_profile.name_str();
-                            let mut name_buf = name_str.clone();
-                            if ui.text_edit_singleline(&mut name_buf).changed() {
-                                // Update name in editor_profile.
-                                let bytes = name_buf.as_bytes();
-                                let len = bytes.len().min(16);
-                                self.editor_profile.name[..len].copy_from_slice(&bytes[..len]);
-                                if len < 16 {
-                                    self.editor_profile.name[len] = 0;
-                                }
-                            }
-                        });
-
-                        ui.add_space(10.0);
-                        ui.separator();
-                        ui.add_space(10.0);
-
-                        // Key bindings.
-                        ui.heading("Key Bindings");
-                        ui.label(
-                            "Click a button to capture a key. Press ESC to clear the binding.",
-                        );
-                        ui.add_space(5.0);
-
-                        self.render_key_binding_row(ui, "Start P1:", FIELD_START_P1);
-                        self.render_key_binding_row(ui, "Start P2:", FIELD_START_P2);
-                        ui.add_space(5.0);
-
-                        self.render_key_binding_row(ui, "Coin P1:", FIELD_COIN_P1);
-                        self.render_key_binding_row(ui, "Coin P2:", FIELD_COIN_P2);
-                        ui.add_space(5.0);
-
-                        self.render_key_binding_row(ui, "Action P1.1:", FIELD_ACTION_P1_1);
-                        self.render_key_binding_row(ui, "Action P1.2:", FIELD_ACTION_P1_2);
-                        self.render_key_binding_row(ui, "Action P2.1:", FIELD_ACTION_P2_1);
-                        self.render_key_binding_row(ui, "Action P2.2:", FIELD_ACTION_P2_2);
-                        ui.add_space(5.0);
-
-                        self.render_key_binding_row(ui, "Service P1:", FIELD_SERVICE_P1);
-                        self.render_key_binding_row(ui, "Service P2:", FIELD_SERVICE_P2);
-                        ui.add_space(5.0);
-
-                        self.render_key_binding_row(ui, "Test P1:", FIELD_TEST_P1);
-                        self.render_key_binding_row(ui, "Test P2:", FIELD_TEST_P2);
-                        ui.add_space(5.0);
-
-                        self.render_key_binding_row(ui, "Pause:", FIELD_PAUSE);
-                        self.render_key_binding_row(ui, "Save:", FIELD_SAVE);
-                        self.render_key_binding_row(ui, "Load:", FIELD_LOAD);
-                        self.render_key_binding_row(ui, "Exit:", FIELD_EXIT);
-
-                        ui.add_space(10.0);
-                        ui.separator();
-                        ui.add_space(10.0);
-
-                        // Action buttons.
-                        ui.horizontal(|ui| {
-                            let button_text = if self.editing_profile_idx.is_some() {
-                                "Save"
-                            } else {
-                                "Add"
-                            };
-
-                            let name = self.editor_profile.name_str();
-                            let name_str = name.trim();
-                            let can_save = !name_str.is_empty();
-
-                            if ui
-                                .add_enabled(can_save, egui::Button::new(button_text))
-                                .clicked()
-                            {
-                                self.save_edited_profile();
-                            }
-
-                            if ui.button("Cancel").clicked() {
-                                self.show_profile_editor = false;
-                                self.capturing_field = None;
-                            }
-                        });
-                    });
-                });
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_editor_name(profile.name_str().into());
+            ui.set_editor_game_name(profile.game_name_str().into());
         }
+        self.refresh();
     }
 
-    fn handle_key_capture(&mut self, ctx: &egui::Context) {
-        if let Some(field_idx) = self.capturing_field {
-            ctx.input(|i| {
-                if !i.events.is_empty() {
-                    for event in &i.events {
-                        if let egui::Event::Key {
-                            key, pressed: true, ..
-                        } = event
-                        {
-                            if let Some(combo) = self.get_key_combo_mut(field_idx) {
-                                // Map egui key to ASCII/keycode.
-                                use egui::Key;
-                                combo.key = match key {
-                                    Key::Escape => {
-                                        // ESC clears the binding.
-                                        *combo = KeyCombo {
-                                            modifiers: 0,
-                                            key: 0,
-                                        };
-                                        self.capturing_field = None;
-                                        break;
-                                    }
-                                    Key::A => b'a',
-                                    Key::B => b'b',
-                                    Key::C => b'c',
-                                    Key::D => b'd',
-                                    Key::E => b'e',
-                                    Key::F => b'f',
-                                    Key::G => b'g',
-                                    Key::H => b'h',
-                                    Key::I => b'i',
-                                    Key::J => b'j',
-                                    Key::K => b'k',
-                                    Key::L => b'l',
-                                    Key::M => b'm',
-                                    Key::N => b'n',
-                                    Key::O => b'o',
-                                    Key::P => b'p',
-                                    Key::Q => b'q',
-                                    Key::R => b'r',
-                                    Key::S => b's',
-                                    Key::T => b't',
-                                    Key::U => b'u',
-                                    Key::V => b'v',
-                                    Key::W => b'w',
-                                    Key::X => b'x',
-                                    Key::Y => b'y',
-                                    Key::Z => b'z',
-                                    Key::Num0 => b'0',
-                                    Key::Num1 => b'1',
-                                    Key::Num2 => b'2',
-                                    Key::Num3 => b'3',
-                                    Key::Num4 => b'4',
-                                    Key::Num5 => b'5',
-                                    Key::Num6 => b'6',
-                                    Key::Num7 => b'7',
-                                    Key::Num8 => b'8',
-                                    Key::Num9 => b'9',
-                                    Key::Space => b' ',
-                                    Key::Enter => 13,
-                                    Key::F1 => {
-                                        combo.modifiers |= MOD_F;
-                                        1
-                                    }
-                                    Key::F2 => {
-                                        combo.modifiers |= MOD_F;
-                                        2
-                                    }
-                                    Key::F3 => {
-                                        combo.modifiers |= MOD_F;
-                                        3
-                                    }
-                                    Key::F4 => {
-                                        combo.modifiers |= MOD_F;
-                                        4
-                                    }
-                                    Key::F5 => {
-                                        combo.modifiers |= MOD_F;
-                                        5
-                                    }
-                                    Key::F6 => {
-                                        combo.modifiers |= MOD_F;
-                                        6
-                                    }
-                                    Key::F7 => {
-                                        combo.modifiers |= MOD_F;
-                                        7
-                                    }
-                                    Key::F8 => {
-                                        combo.modifiers |= MOD_F;
-                                        8
-                                    }
-                                    Key::F9 => {
-                                        combo.modifiers |= MOD_F;
-                                        9
-                                    }
-                                    Key::F10 => {
-                                        combo.modifiers |= MOD_F;
-                                        10
-                                    }
-                                    Key::F11 => {
-                                        combo.modifiers |= MOD_F;
-                                        11
-                                    }
-                                    Key::F12 => {
-                                        combo.modifiers |= MOD_F;
-                                        12
-                                    }
-                                    _ => combo.key, // Keep existing key if not mapped.
-                                };
-                            }
-                            self.capturing_field = None;
-                            break;
+    /// Store an edited text field and write the (possibly truncated) value back to the UI.
+    fn editor_text_edited(
+        &self,
+        text: &str,
+        store: impl FnOnce(&mut ButtonMapping, &str) -> String,
+        write_back: impl FnOnce(&AppWindow, SharedString),
+    ) {
+        let stored = {
+            let mut st = self.state.borrow_mut();
+            let Some(editor) = st.editor.as_mut() else {
+                return;
+            };
+            editor.error = None;
+            store(&mut editor.profile, text)
+        };
+        if stored != text {
+            if let Some(ui) = self.ui.upgrade() {
+                write_back(&ui, stored.into());
+            }
+        }
+        self.refresh();
+    }
+
+    fn key_captured(&self, text: &str) {
+        self.update(|st| {
+            if let Some(editor) = st.editor.as_mut() {
+                if let Some(field) = editor.capturing_field {
+                    if let Some(combo) = binding_mut(&mut editor.profile, field) {
+                        if apply_captured_key(combo, text) == CaptureResult::Done {
+                            editor.capturing_field = None;
                         }
                     }
                 }
-            });
+            }
+        });
+    }
+
+    fn modifier_toggled(&self, field: usize, modifier: i32, checked: bool) {
+        self.update(|st| {
+            let Some(editor) = st.editor.as_mut() else {
+                return;
+            };
+            let (Some(combo), Some(flag)) = (
+                binding_mut(&mut editor.profile, field),
+                modifier_flag(modifier),
+            ) else {
+                return;
+            };
+            if checked {
+                combo.modifiers |= flag;
+            } else {
+                combo.modifiers &= !flag;
+            }
+        });
+    }
+
+    /// Wait for a running background operation, then disconnect. Called after the window closed.
+    fn shutdown(&self) {
+        self.poll_timer.stop();
+        let mut st = self.state.borrow_mut();
+        // A running background operation owns the connection; wait for it to hand it back.
+        if let Some(rx) = st.pending_result.take() {
+            match rx.recv_timeout(EXIT_SYNC_TIMEOUT) {
+                Ok(result) => st.apply_sync_result(result),
+                Err(e) => eprintln!(
+                    "Warning: Background operation did not finish on exit: {}",
+                    e
+                ),
+            }
         }
+
+        // Switch the firmware back to BLAST mode and close the serial port.
+        st.disconnect();
     }
 }
 
-impl eframe::App for BlastApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.poll_pending_result();
+/// Create the main window, run the event loop and disconnect cleanly afterwards.
+pub fn run() -> Result<()> {
+    let ui = AppWindow::new()?;
 
-        self.render_top_panel(ctx);
-        self.render_status_bar(ctx);
-        self.render_profile_list(ctx);
-        self.render_syncing_overlay(ctx);
-        self.render_delete_confirmation(ctx);
-        self.render_reload_confirmation(ctx);
-        self.render_profile_editor(ctx);
-        self.handle_key_capture(ctx);
+    let theme = confy::load::<ThemeConfig>("blast", "config")
+        .map(|config| config.theme)
+        .unwrap_or_default();
 
-        // Keep repainting while waiting for background operation.
-        if self.is_syncing {
-            ctx.request_repaint();
+    let controller = Rc::new(Controller {
+        ui: ui.as_weak(),
+        state: RefCell::new(AppState {
+            serial_ports: serialport::available_ports().unwrap_or_default(),
+            theme,
+            ..Default::default()
+        }),
+        port_model: Rc::new(VecModel::default()),
+        profile_model: Rc::new(VecModel::default()),
+        binding_model: Rc::new(VecModel::default()),
+        poll_timer: Timer::default(),
+    });
+
+    ui.set_app_version(APP_VERSION.into());
+    ui.set_theme(theme.index());
+    ui.set_port_labels(ModelRc::from(controller.port_model.clone()));
+    ui.set_profiles(ModelRc::from(controller.profile_model.clone()));
+    ui.set_bindings(ModelRc::from(controller.binding_model.clone()));
+
+    // Connection.
+    let c = controller.clone();
+    ui.on_refresh_ports(move || c.refresh_ports());
+    let c = controller.clone();
+    ui.on_connect(move |index| {
+        if let Ok(index) = usize::try_from(index) {
+            c.connect(index);
         }
+    });
+    let c = controller.clone();
+    ui.on_disconnect(move || c.disconnect());
+    let c = controller.clone();
+    ui.on_reload(move || c.request_reload());
+    let c = controller.clone();
+    ui.on_save(move || c.save());
+    let c = controller.clone();
+    ui.on_reboot(move || c.reboot());
+    let c = controller.clone();
+    ui.on_theme_selected(move |index| c.theme_selected(index));
+
+    // Profile list. Indices come from the UI and are validated by the AppState methods.
+    let c = controller.clone();
+    ui.on_add_profile(move || c.open_editor(None));
+    let c = controller.clone();
+    ui.on_edit_profile(move |i| c.open_editor(Some(i as usize)));
+    let c = controller.clone();
+    ui.on_duplicate_profile(move |i| c.update(|st| st.duplicate_profile(i as usize)));
+    let c = controller.clone();
+    ui.on_move_profile_up(move |i| c.update(|st| st.move_profile_up(i as usize)));
+    let c = controller.clone();
+    ui.on_move_profile_down(move |i| c.update(|st| st.move_profile_down(i as usize)));
+    let c = controller.clone();
+    ui.on_delete_profile(move |i| c.update(|st| st.delete_profile_idx = Some(i as usize)));
+    let c = controller.clone();
+    ui.on_confirm_delete(move || {
+        c.update(|st| {
+            if let Some(idx) = st.delete_profile_idx.take() {
+                st.delete_profile(idx);
+            }
+        })
+    });
+    let c = controller.clone();
+    ui.on_cancel_delete(move || c.update(|st| st.delete_profile_idx = None));
+    let c = controller.clone();
+    ui.on_confirm_reload(move || {
+        c.state.borrow_mut().show_reload_confirmation = false;
+        c.reload();
+    });
+    let c = controller.clone();
+    ui.on_cancel_reload(move || c.update(|st| st.show_reload_confirmation = false));
+
+    // Profile editor.
+    let c = controller.clone();
+    ui.on_editor_name_edited(move |text| {
+        c.editor_text_edited(
+            &text,
+            |profile, text| {
+                profile.set_name(text);
+                profile.name_str()
+            },
+            |ui, value| ui.set_editor_name(value),
+        )
+    });
+    let c = controller.clone();
+    ui.on_editor_game_name_edited(move |text| {
+        c.editor_text_edited(
+            &text,
+            |profile, text| {
+                profile.set_game_name(text);
+                profile.game_name_str()
+            },
+            |ui, value| ui.set_editor_game_name(value),
+        )
+    });
+    let c = controller.clone();
+    ui.on_start_capture(move |field| {
+        c.update(|st| {
+            if let Some(editor) = st.editor.as_mut() {
+                editor.capturing_field = usize::try_from(field).ok();
+            }
+        })
+    });
+    let c = controller.clone();
+    ui.on_key_captured(move |text| c.key_captured(&text));
+    let c = controller.clone();
+    ui.on_modifier_toggled(move |field, modifier, checked| {
+        if let Ok(field) = usize::try_from(field) {
+            c.modifier_toggled(field, modifier, checked);
+        }
+    });
+    let c = controller.clone();
+    ui.on_editor_save(move || {
+        c.update(|st| {
+            st.save_edited_profile();
+        })
+    });
+    let c = controller.clone();
+    ui.on_editor_cancel(move || c.update(|st| st.editor = None));
+
+    controller.refresh();
+    controller.select_blast_port();
+    ui.run()?;
+
+    controller.shutdown();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(name: &str, game_name: &str) -> ButtonMapping {
+        let mut profile = ButtonMapping::default();
+        profile.set_name(name);
+        profile.set_game_name(game_name);
+        profile
+    }
+
+    fn names(st: &AppState) -> Vec<String> {
+        st.profiles.iter().map(|p| p.name_str()).collect()
+    }
+
+    fn state_with(profiles: Vec<ButtonMapping>) -> AppState {
+        AppState {
+            profiles,
+            ..Default::default()
+        }
+    }
+
+    fn port(name: &str, usb: Option<(u16, u16, Option<&str>)>) -> SerialPortInfo {
+        SerialPortInfo {
+            port_name: name.to_string(),
+            port_type: match usb {
+                Some((vid, pid, product)) => SerialPortType::UsbPort(serialport::UsbPortInfo {
+                    vid,
+                    pid,
+                    serial_number: None,
+                    manufacturer: None,
+                    product: product.map(str::to_string),
+                }),
+                None => SerialPortType::Unknown,
+            },
+        }
+    }
+
+    #[test]
+    fn firmware_version_mismatch() {
+        let v = |major, minor, patch| FirmwareVersion {
+            major,
+            minor,
+            patch,
+        };
+        assert!(!is_firmware_version_mismatch("1.2.0", &v(1, 2, 0)));
+        assert!(!is_firmware_version_mismatch("1.2.0-rc.3", &v(1, 2, 0)));
+        assert!(is_firmware_version_mismatch("1.2.0", &v(1, 1, 0)));
+        assert!(is_firmware_version_mismatch("1.2.0-rc.3", &v(1, 2, 1)));
+        // Unofficial builds are never flagged.
+        assert!(!is_firmware_version_mismatch("0.0.0+abc1234", &v(1, 2, 0)));
+        assert!(!is_firmware_version_mismatch("1.2.0", &v(0, 0, 0)));
+    }
+
+    #[test]
+    fn blast_port_is_found_by_name_then_usb_id() {
+        let other = port(
+            "/dev/ttyACM0",
+            Some((0x041E, 0x3278, Some("Sound Blaster X4"))),
+        );
+        let by_name = port("/dev/ttyACM1", Some((0x1234, 0x5678, Some("B.L.A.S.T."))));
+        let by_id = port("COM3", Some((0xF144, 0x0001, Some("USB Serial Device"))));
+        let plain = port("/dev/ttyS0", None);
+
+        assert_eq!(blast_port_index(&[]), None);
+        assert_eq!(blast_port_index(&[other.clone(), plain.clone()]), None);
+        assert_eq!(
+            blast_port_index(&[other.clone(), by_id.clone(), by_name.clone()]),
+            Some(2)
+        );
+        assert_eq!(blast_port_index(&[plain, other, by_id]), Some(2));
+    }
+
+    #[test]
+    fn port_label_ends_with_usb_id() {
+        assert_eq!(
+            port_label(&port(
+                "COM3",
+                Some((0xF144, 0x0001, Some("USB Serial Device")))
+            )),
+            "COM3 (USB Serial Device) [F144:0001]"
+        );
+        assert_eq!(
+            port_label(&port("COM4", Some((0x041E, 0x3278, None)))),
+            "COM4 [041E:3278]"
+        );
+        assert_eq!(port_label(&port("/dev/ttyS0", None)), "/dev/ttyS0");
+    }
+
+    #[test]
+    fn move_profiles() {
+        let mut st = state_with(vec![profile("A", ""), profile("B", ""), profile("C", "")]);
+        st.move_profile_up(0);
+        st.move_profile_down(2);
+        assert_eq!(names(&st), ["A", "B", "C"]);
+        assert!(!st.is_dirty);
+
+        st.move_profile_down(0);
+        assert_eq!(names(&st), ["B", "A", "C"]);
+        st.move_profile_up(2);
+        assert_eq!(names(&st), ["B", "C", "A"]);
+        assert!(st.is_dirty);
+    }
+
+    #[test]
+    fn duplicate_profile_clears_game_name() {
+        let mut st = state_with(vec![profile("Time Crisis", "tcrisis"), profile("B", "")]);
+        st.duplicate_profile(0);
+        assert_eq!(names(&st), ["Time Crisis", "Time Crisis (Cop", "B"]);
+        assert_eq!(st.profiles[1].game_name_str(), "");
+        assert!(st.is_dirty);
+    }
+
+    #[test]
+    fn delete_profile_ignores_invalid_index() {
+        let mut st = state_with(vec![profile("A", ""), profile("B", "")]);
+        st.delete_profile(5);
+        assert!(!st.is_dirty);
+        st.delete_profile(0);
+        assert_eq!(names(&st), ["B"]);
+        assert!(st.is_dirty);
+    }
+
+    fn open_editor(st: &mut AppState, profile: ButtonMapping, editing_idx: Option<usize>) {
+        st.editor = Some(EditorState {
+            profile,
+            editing_idx,
+            capturing_field: None,
+            error: None,
+        });
+    }
+
+    #[test]
+    fn editor_rejects_empty_name() {
+        let mut st = state_with(vec![]);
+        open_editor(&mut st, profile("  ", ""), None);
+        assert!(!st.save_edited_profile());
+        assert!(st.editor.as_ref().is_some_and(|e| e.error.is_some()));
+        assert!(st.profiles.is_empty());
+    }
+
+    #[test]
+    fn editor_rejects_duplicate_game_name() {
+        let mut st = state_with(vec![profile("A", "sf2"), profile("B", "")]);
+        open_editor(&mut st, profile("B", "sf2"), Some(1));
+        assert!(!st.save_edited_profile());
+        assert_eq!(st.profiles[1].game_name_str(), "");
+
+        // Keeping its own game name is fine.
+        open_editor(&mut st, profile("A2", "sf2"), Some(0));
+        assert!(st.save_edited_profile());
+        assert_eq!(names(&st), ["A2", "B"]);
+        assert!(st.editor.is_none());
+    }
+
+    #[test]
+    fn editor_adds_new_profile() {
+        let mut st = state_with(vec![profile("A", "")]);
+        open_editor(&mut st, profile("New", "hotd"), None);
+        assert!(st.save_edited_profile());
+        assert_eq!(names(&st), ["A", "New"]);
+        assert!(st.is_dirty);
     }
 }
