@@ -208,10 +208,16 @@ jobs:
           scripts/version.sh firmware-header "$BLAST_VERSION" > firmware/version.h
           cat firmware/version.h
 
+      # Same board and options as local builds (.vscode/arduino.json). The board selects boot2:
+      # rp2040:rp2040:generic reads flash with 03h at 100 MHz (200 MHz / 2), out of spec for the
+      # Pico W flash, and the firmware crashes before USB starts. The flash option places the
+      # EEPROM, so a different FS size would also lose the stored profiles.
       - name: Build firmware
         run: |
+          fqbn=$(jq -r '.board + ":" + .configuration' .vscode/arduino.json)
+          echo "FQBN: $fqbn"
           arduino-cli compile \
-            --fqbn rp2040:rp2040:generic \
+            --fqbn "$fqbn" \
             --output-dir firmware_build \
             firmware/firmware.ino
           mkdir -p dist

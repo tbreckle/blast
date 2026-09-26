@@ -26,9 +26,10 @@ On Linux the build needs `libudev-dev` (serialport), `libfontconfig-dev` (Slint'
 
 ### Firmware (Arduino CLI), run from the repo root
 ```bash
-# Local board config lives in .vscode/arduino.json (rpipicow, usbstack=picosdk, output to _build/)
-arduino-cli compile --fqbn rp2040:rp2040:rpipicow --output-dir _build firmware/firmware.ino
-# CI compiles with --fqbn rp2040:rp2040:generic
+# Board config lives in .vscode/arduino.json (rpipicow, 128 KB FS, usbstack=picosdk); CI uses the same FQBN.
+# Always pass the full FQBN: the board selects boot2 (rp2040:rp2040:generic doesn't boot on the Pico W at
+# 200 MHz) and the flash option places the EEPROM (a different FS size loses the stored profiles).
+arduino-cli compile --fqbn "$(jq -r '.board + ":" + .configuration' .vscode/arduino.json)" --output-dir _build firmware/firmware.ino
 
 # Lint the same way CI does
 cppcheck --enable=all --error-exitcode=1 --suppress=missingIncludeSystem --suppress=unusedFunction firmware/

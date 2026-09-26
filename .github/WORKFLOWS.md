@@ -39,7 +39,7 @@ Called by CI and Release Finish with a `version` (and optionally a `ref`).
 | App (macos-universal) | test + build for arm64 and x86_64, `lipo` | `blast-app-<version>-macos-universal.tar.gz` |
 | Clippy | `cargo clippy -D warnings` | |
 | Format | `cargo fmt --check` | |
-| Firmware | Arduino CLI build (`rp2040:rp2040:generic`, core 6.1.1) | `blast-firmware-<version>.uf2` |
+| Firmware | Arduino CLI build (FQBN from `.vscode/arduino.json`, core 6.1.1) | `blast-firmware-<version>.uf2` |
 | Firmware Lint | cppcheck | |
 | Scripts | shellcheck + `scripts/test.sh` | |
 

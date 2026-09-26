@@ -5,8 +5,9 @@ Arduino/C++ firmware for RP2040/RP2350-based arcade controller.
 ## Build
 
 - Board package: Earle Philhower's Arduino-Pico core (`rp2040:rp2040`), version 6.1.1
-- Local board config: `../.vscode/arduino.json` (`rpipicow`, `usbstack=picosdk`, output to `../_build/`)
-- Build from repo root: `arduino-cli compile --fqbn rp2040:rp2040:rpipicow --output-dir _build firmware/firmware.ino`
+- Board config: `../.vscode/arduino.json` (`rpipicow`, `flash=2097152_131072`, `usbstack=picosdk`, output to `../_build/`). CI builds with the same FQBN.
+- Build from repo root: `arduino-cli compile --fqbn "$(jq -r '.board + ":" + .configuration' .vscode/arduino.json)" --output-dir _build firmware/firmware.ino`
+  - Don't shorten the FQBN. The board selects boot2: `rp2040:rp2040:generic` reads flash with `03h` at 100 MHz and doesn't boot. The flash option places the EEPROM, and a different FS size loses the stored profiles.
 - Lint (as CI): `cppcheck --enable=all --error-exitcode=1 --suppress=missingIncludeSystem --suppress=unusedFunction firmware/`
 - Flash from this directory: `./flash.sh [-p PORT] [uf2]`. The port is found by USB VID/PID `f144:0001`, falling back to the first `/dev/ttyACM*`. It then does a 1200-baud touch to enter the bootloader, then `picotool load` + `picotool reboot`.
 
