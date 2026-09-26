@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Firmware reloads the active profile when the app saves it, so changes apply without reselecting it (returns to the profile selection if the profile was deleted)
+- `app/rust-toolchain.toml` pins the Rust toolchain (1.98 with clippy and rustfmt) for local builds and CI
 
 ### Fixed
 - LEDs of action buttons A and B were swapped for both players
