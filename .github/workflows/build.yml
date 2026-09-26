@@ -1,0 +1,257 @@
+name: Build
+
+# Reusable build of app and firmware with an injected version (see scripts/version.sh).
+# Called by ci.yml for every push/PR and by release-finish.yml for official releases.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to inject, e.g. 1.2.0, 1.2.0-rc.3 or 0.0.0+abc1234"
+        required: true
+        type: string
+      ref:
+        description: "Commit to build (defaults to the commit of the calling event)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: App (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            archive: tar.gz
+          - name: windows-x86_64
+            os: windows-latest
+            archive: zip
+          - name: macos-universal
+            os: macos-latest
+            archive: tar.gz
+    env:
+      BLAST_VERSION: ${{ inputs.version }}
+      PACKAGE: blast-app-${{ inputs.version }}-${{ matrix.name }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libfontconfig-dev pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('app/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Run tests
+        run: cargo test --locked --release
+
+      - name: Build
+        if: runner.os != 'macOS'
+        run: cargo build --locked --release
+
+      - name: Build universal binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --locked --release --target aarch64-apple-darwin
+          cargo build --locked --release --target x86_64-apple-darwin
+          mkdir -p target/release
+          lipo -create -output target/release/blast \
+            target/aarch64-apple-darwin/release/blast \
+            target/x86_64-apple-darwin/release/blast
+
+      # Archive on the runner: upload-artifact drops the executable bit.
+      - name: Package
+        run: |
+          rm -rf dist
+          mkdir -p "dist/$PACKAGE"
+          cp ../LICENSE "dist/$PACKAGE/"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cp target/release/blast.exe "dist/$PACKAGE/"
+            (cd dist && pwsh -NoProfile -Command "Compress-Archive -Path '$PACKAGE' -DestinationPath '$PACKAGE.zip'")
+          else
+            cp target/release/blast "dist/$PACKAGE/"
+            tar -C dist -czf "dist/$PACKAGE.tar.gz" "$PACKAGE"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PACKAGE }}
+          path: app/dist/${{ env.PACKAGE }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libfontconfig-dev pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('app/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-clippy-
+
+      - name: Run clippy
+        working-directory: app
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        working-directory: app
+        run: cargo fmt -- --check
+
+  firmware:
+    name: Firmware
+    runs-on: ubuntu-latest
+    env:
+      BLAST_VERSION: ${{ inputs.version }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      # Official install script; arduino/setup-arduino-cli has no Node.js 24 release.
+      - name: Set up Arduino CLI
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/.local/bin" sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Core and library versions are pinned below, so this file's hash is the cache key.
+      - name: Cache Arduino core and libraries
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-${{ hashFiles('.github/workflows/build.yml') }}
+
+      - name: Install Raspberry Pi RP2040 core
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
+          # Version must match README.md.
+          arduino-cli core install rp2040:rp2040@6.1.1
+
+      - name: Install required libraries
+        run: |
+          arduino-cli lib update-index
+          # Versions must match the library table in README.md.
+          # --no-deps: otherwise dependencies are installed in their latest versions.
+          arduino-cli lib install --no-deps \
+            "Adafruit BusIO@1.17.4" \
+            "Adafruit GFX Library@1.12.4" \
+            "Adafruit SSD1306@2.5.16" \
+            "Adafruit MCP23017 Arduino Library@2.3.2"
+          arduino-cli lib list
+
+      - name: Inject version
+        run: |
+          scripts/version.sh firmware-header "$BLAST_VERSION" > firmware/version.h
+          cat firmware/version.h
+
+      - name: Build firmware
+        run: |
+          arduino-cli compile \
+            --fqbn rp2040:rp2040:generic \
+            --output-dir firmware_build \
+            firmware/firmware.ino
+          mkdir -p dist
+          cp firmware_build/firmware.ino.uf2 "dist/blast-firmware-$BLAST_VERSION.uf2"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: blast-firmware-${{ inputs.version }}
+          path: dist/blast-firmware-${{ inputs.version }}.uf2
+          if-no-files-found: error
+
+  firmware-lint:
+    name: Firmware Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: |
+          cppcheck --enable=all --error-exitcode=1 \
+            --suppress=missingIncludeSystem \
+            --suppress=unusedFunction \
+            firmware/
+
+  scripts:
+    name: Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Run shellcheck
+        run: shellcheck scripts/*.sh
+
+      - name: Test version and changelog scripts
+        run: scripts/test.sh

@@ -20,6 +20,7 @@ Arduino/C++ firmware for RP2040/RP2350-based arcade controller.
 - `storage.cpp/h`: profile persistence in flash-emulated EEPROM (`MAX_PROFILES` slots of `sizeof(ButtonMapping)`, 79 bytes). The layout version is stored in the last EEPROM byte (`STORAGE_VERSION`), and `migrateStorage()` converts old layouts at boot. Any change to the `ButtonMapping` layout needs a version bump plus a migration step.
 - `keycodes.h`: key code and modifier definitions (MOD_NONE, MOD_CTRL, MOD_ALT, MOD_SHIFT, MOD_F, MOD_ESC)
 - `_debug.h`: debug flag toggles
+- `version.h`: `FIRMWARE_VERSION_MAJOR/MINOR/PATCH` (sent via `CMD_GET_VERSION`) and `FIRMWARE_VERSION_STRING` (splash screen). The committed file says `0.0.0`. CI overwrites it with `scripts/version.sh firmware-header <version>`. Don't commit a generated version.
 
 ## Serial protocol modes
 

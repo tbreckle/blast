@@ -8,7 +8,10 @@ Rust/Slint desktop app for configuring the B.L.A.S.T. arcade controller over ser
 cargo build           # debug build (build.rs compiles ui/app.slint)
 cargo build --release # release build (optimized for size, LTO, stripped)
 cargo test            # unit tests (keymap, types, slip, ui::tests for AppState logic)
+BLAST_VERSION=$(../scripts/version.sh) cargo build --release  # with the version CI would inject
 ```
+
+The app version comes from the `BLAST_VERSION` env var (set by CI from `scripts/version.sh`). `build.rs` passes it on as `env!("BLAST_VERSION")`, with `CARGO_PKG_VERSION` as the fallback. Keep `Cargo.toml` at `0.0.0`.
 
 Slint 1.18 needs Rust 1.92+. On Linux the build needs `libudev-dev` (serialport), `libfontconfig-dev` and `pkg-config`: Slint's font loading (`yeslogic-fontconfig-sys`) links fontconfig/freetype in the app build (only the `slint-build` build-dependency uses dlopen). X11/Wayland and xkbcommon are loaded at runtime.
 

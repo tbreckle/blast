@@ -60,77 +60,63 @@ Then create a Pull Request on GitHub targeting the `develop` branch.
 
 ### Creating a Release
 
-1. Go to GitHub Actions → GitFlow Release
-2. Click "Run workflow"
-3. Enter the version number (e.g., `1.0.0`) following semantic versioning
-4. Select release type (major/minor/patch)
-5. The workflow will:
-   - Create a release branch
-   - Update version numbers
-   - Create a pull request to `main`
-   - Build release artifacts
+1. Go to GitHub Actions → **Release Start** → "Run workflow"
+2. Choose `kind: release` and the part to bump (`major`/`minor`/`patch`)
+3. The workflow:
+   - computes the next version from the latest `vX.Y.Z` tag (`scripts/version.sh next <bump>`)
+   - creates `release/X.Y.Z` from `develop`
+   - moves the `[Unreleased]` CHANGELOG entries into a `[X.Y.Z]` section
+   - opens a pull request to `main`
+4. CI builds the release branch as `X.Y.Z-rc.N`. Only fixes for this release go onto it.
+5. Merge the PR with **Create a merge commit** (no squash/rebase). **Release Finish** then:
+   - builds `X.Y.Z` from the merge commit
+   - creates the tag `vX.Y.Z` and the GitHub Release (app for Linux/Windows/macOS, firmware UF2, `SHA256SUMS`, notes from CHANGELOG.md)
+   - opens a back-merge PR from `main` into `develop` and deletes the release branch
+6. Review and merge the back-merge PR (again with a merge commit). Check that CHANGELOG entries
+   added to `develop` in the meantime stay under `[Unreleased]`.
 
-6. Review and merge the PR to `main`
-7. The workflow automatically:
-   - Creates a version tag (`v1.0.0`)
-   - Merges changes back to `develop`
-   - Creates a GitHub Release
+No version numbers are committed: `app/Cargo.toml` and `firmware/version.h` stay at `0.0.0`,
+CI injects the version at build time. So the back-merge brings no version into `develop`.
 
 ### Hotfix (Critical Production Fixes)
 
+1. GitHub Actions → **Release Start** with `kind: hotfix` creates `hotfix/X.Y.Z` (patch bump) from `main` and opens a PR to `main`
+2. Push the fix to the hotfix branch and add it to the `[X.Y.Z]` section in CHANGELOG.md
+3. Merge the PR: the same **Release Finish** steps as for a release run, including the back-merge PR into `develop`
+
+## Versioning
+
+Versions follow [Semantic Versioning](https://semver.org/) and are computed from the branch and
+the tags by `scripts/version.sh` (a small replacement for GitVersion):
+
+| Branch / ref | Version | Meaning |
+|---|---|---|
+| tag `vX.Y.Z` (on `main`) | `X.Y.Z` | official release |
+| `release/X.Y.Z`, `hotfix/X.Y.Z` | `X.Y.Z-rc.N` | release candidate, N = commits since the branch left `main` |
+| `develop`, `feature/*`, `bugfix/*`, anything else | `0.0.0+<sha>` | unofficial build |
+
+- **MAJOR** (X.0.0) - Breaking changes (e.g. protocol or profile layout changes that need a matching app and firmware)
+- **MINOR** (0.X.0) - New features, backward compatible
+- **PATCH** (0.0.X) - Bug fixes
+
+The version is injected into the app (`BLAST_VERSION`, shown in Help → About) and the firmware
+(`firmware/version.h`, reported via `CMD_GET_VERSION` and shown on the splash screen). The
+firmware only transports `X.Y.Z`, so a release candidate reports its target version. The app
+warns in the status bar when app and firmware come from different releases.
+
 ```bash
-# Create hotfix from main
-git checkout main
-git pull origin main
-git checkout -b hotfix/1.0.1
-
-# Fix the critical issue
-# ... make commits ...
-
-# Create PR to main
-git push origin hotfix/1.0.1
-```
-
-After merging to `main`:
-```bash
-git checkout develop
-git pull origin develop
-git merge main
-git push origin develop
+scripts/version.sh              # version of the current checkout
+scripts/version.sh next minor   # next minor release version
+BLAST_VERSION=$(scripts/version.sh) cargo build --release   # local build with version (from app/: ../scripts/version.sh)
 ```
 
 ## CI/CD Pipelines
 
-### App Build (`app-build.yml`)
-- Triggers on: Push/PR to main/develop, or changes in `app/`
-- Runs on: Linux, Windows, macOS
-- Steps:
-  - Build release binary
-  - Run tests
-  - Clippy linting
-  - Format checking
-  - Upload artifacts
+See [.github/WORKFLOWS.md](.github/WORKFLOWS.md).
 
-### Firmware Build (`firmware-build.yml`)
-- Triggers on: Push/PR to main/develop, or changes in `firmware/`
-- Runs on: Ubuntu
-- Steps:
-  - Compile Arduino sketch
-  - Build UF2 file
-  - C++ linting
-  - Upload artifacts
-
-### Release Workflow (`release.yml`)
-- Manual trigger via GitHub Actions
-- Creates release branch with version bumps
-- Builds artifacts for all platforms
-
-### Auto-Tag & Release (`tag-release.yml`)
-- Triggers on: PR merge to main from release branch
-- Steps:
-  - Create version tag
-  - Merge back to develop
-  - Create GitHub Release
+- **CI** (`ci.yml`): every push to a GitFlow branch and every PR to `main`/`develop`: version, app build + tests (Linux, Windows, macOS universal), clippy, fmt, firmware build, cppcheck, script tests
+- **Release Start** (`release-start.yml`): manual, creates the release/hotfix branch and PR
+- **Release Finish** (`release-finish.yml`): on merge of a release/hotfix PR into `main`, tags, builds and publishes
 
 ## Branch Protection Rules
 
@@ -141,16 +127,6 @@ Configured on `main` and `develop`:
 - ✅ Require branches to be up to date before merging
 - ✅ Require code review dismissal when new commits pushed
 - ✅ Enforce all configured restrictions for administrators
-
-## Semantic Versioning
-
-Versions follow [Semantic Versioning](https://semver.org/):
-
-- **MAJOR** (X.0.0) - Breaking changes
-- **MINOR** (0.X.0) - New features, backward compatible
-- **PATCH** (0.0.X) - Bug fixes
-
-Example progression: 0.1.0 → 0.2.0 → 1.0.0 → 1.0.1 → 1.1.0
 
 ## Common Commands
 

@@ -127,6 +127,8 @@ export component AppWindow inherits Window {
     in property <bool> connected;
     in property <string> connected-port;
     in property <string> firmware-version;
+    // App and firmware come from different releases.
+    in property <bool> firmware-mismatch;
 
     // Profiles.
     in property <[ProfileRow]> profiles;
@@ -384,9 +386,16 @@ export component AppWindow inherits Window {
                     vertical-alignment: center;
                 }
 
-                if root.firmware-version != "": Text {
+                if root.firmware-version != "" && !root.firmware-mismatch: Text {
                     text: "Firmware: " + root.firmware-version;
                     vertical-alignment: center;
+                }
+
+                if root.firmware-mismatch: Text {
+                    text: "⚠ Firmware " + root.firmware-version + " does not match app " + root.app-version;
+                    vertical-alignment: center;
+                    // Amber, readable on light and dark backgrounds.
+                    color: #d98200;
                 }
 
                 if root.dirty: Text {

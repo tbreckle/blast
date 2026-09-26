@@ -60,6 +60,7 @@ The OLED shows the active mode as "B" or "S" (controlled by `SHOW_PROTOCOL_MODE_
 
 **Keep both sides in sync:**
 - Command and error IDs are defined twice: `#define CMD_*`/`ERR_*` in `serializer.h` and `pub const CMD_*` in `protocol.rs`.
+- The firmware version (`firmware/version.h`, `CMD_GET_VERSION`) is compared with the app version (`is_firmware_version_mismatch()` in `app/src/ui.rs`). A mismatch between official releases shows a warning.
 - The USB product name and VID/PID set in `setup()` (`firmware.ino`) are used by the app to preselect the controller (`BLAST_PRODUCT_NAME`/`BLAST_USB_ID` in `app/src/ui.rs`) and by `firmware/flash.sh` to find the port.
 - Profile/settings structs are C structs in the firmware and `#[repr(C, packed)]` in `app/src/types.rs`. They are sent as raw bytes, so any field change has to be mirrored exactly on both sides.
 - `SET_PROFILE` only updates RAM. `SAVE_PROFILE` persists to EEPROM (flash-emulated, `storage.cpp`, up to `MAX_PROFILES` slots of `sizeof(ButtonMapping)`).
@@ -89,10 +90,26 @@ Branch naming: `feature/*`, `bugfix/*`, `release/*`, `hotfix/*`
 
 ## CI/CD
 
-- **app-build.yml**: build + test (release) on Linux/Windows/macOS, clippy, fmt check. Triggered by changes under `app/`.
-- **firmware-build.yml**: Arduino CLI compile (produces the UF2 artifact) + cppcheck. Triggered by changes under `firmware/` or `pcb/`.
-- **release.yml**: manual dispatch; creates a release branch with version bumps.
-- **tag-release.yml**: tags automatically when a release merges to `main` and creates the GitHub Release.
+See `.github/WORKFLOWS.md`.
+
+- **ci.yml**: every push to a GitFlow branch and every PR to `main`/`develop`. Computes the version, then runs the reusable **build.yml**:
+  - app build + tests (Linux x86_64, Windows x86_64, macOS universal), clippy, fmt
+  - firmware build (UF2) + cppcheck
+  - shellcheck + `scripts/test.sh`
+- **release-start.yml**: manual dispatch (`kind` release/hotfix, `bump`). Creates `release/X.Y.Z` from `develop` or `hotfix/X.Y.Z` from `main`, cuts the CHANGELOG section, opens a PR to `main`.
+- **release-finish.yml**: runs when that PR is merged. Builds `X.Y.Z`, creates tag + GitHub Release with artifacts, and opens a back-merge PR into `develop` via `backmerge/X.Y.Z`.
+
+### Versioning
+SemVer, computed by `scripts/version.sh` from the branch and the `vX.Y.Z` tags; nothing is committed:
+- tag `vX.Y.Z` → `X.Y.Z`
+- `release/X.Y.Z` or `hotfix/X.Y.Z` → `X.Y.Z-rc.N`
+- anything else (incl. `develop`) → `0.0.0+<sha>`
+
+The version is injected at build time:
+- app: env var `BLAST_VERSION`, read by `build.rs`
+- firmware: CI overwrites `firmware/version.h`
+
+`app/Cargo.toml` and the committed `firmware/version.h` stay at `0.0.0`; don't bump them. Add changes to `## [Unreleased]` in CHANGELOG.md.
 
 ## Rust Code Standards
 

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- CI/CD pipeline with GitFlow releases: `release-start.yml` creates release/hotfix branches, `release-finish.yml` tags, builds and publishes GitHub Releases
+- SemVer versioning via `scripts/version.sh`, injected into app and firmware at build time (unofficial builds are `0.0.0+<sha>`)
+- Firmware version on the OLED splash screen
+- App warns when app and firmware versions don't match
+- macOS universal binary (Apple Silicon + Intel)
+
 ## [1.0.0] - 2026-02-01
 
 ### Added
@@ -31,10 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 When making changes to the project:
 
 1. Add your changes to the "Unreleased" section under the appropriate category
-2. When creating a release:
-   - Create a new section with the version and date
-   - Move items from "Unreleased" to the new section
-   - Update the version number to match the release tag
+2. When a release starts, `release-start.yml` moves the "Unreleased" entries into a new
+   `## [X.Y.Z] - date` section (`scripts/changelog.sh release`). That section becomes the
+   GitHub Release notes (`scripts/changelog.sh notes`), empty categories are left out.
 
 ### Categories
 

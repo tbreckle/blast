@@ -6,6 +6,8 @@
 
 A comprehensive open-source arcade controller platform featuring customizable button mapping, LED control, and a modern configuration tool.
 
+[![CI](https://github.com/tbreckle/blast/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/tbreckle/blast/actions/workflows/ci.yml)
+
 ## Overview
 
 B.L.A.S.T. is a complete arcade controller solution designed for retro gaming and arcade simulation enthusiasts. It combines a RP2040/RP2350-based firmware with an intuitive companion application to deliver a fully programmable arcade input device with per-button LED control.
@@ -53,10 +55,17 @@ blast/
 ├── pcb/               # KiCAD PCB designs
 │   └── blast/         # Main board schematic and layout
 │
+├── scripts/           # CI helpers: version.sh (SemVer from GitFlow), changelog.sh
+│
 └── CHANGELOG.md       # Release notes and version history
 ```
 
 ## Getting Started
+
+Prebuilt app binaries (Linux, Windows, macOS) and the firmware UF2 are attached to each
+[GitHub Release](https://github.com/tbreckle/blast/releases). Use app and firmware of the same
+release; the app warns in the status bar when the versions differ. Builds showing version
+`0.0.0+<commit>` are unofficial development builds (see [GITFLOW.md](GITFLOW.md#versioning)).
 
 ### Firmware Development
 

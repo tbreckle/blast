@@ -102,6 +102,17 @@ fn modifier_flag(index: i32) -> Option<u8> {
     }
 }
 
+/// App version, injected by build.rs (see scripts/version.sh).
+const APP_VERSION: &str = env!("BLAST_VERSION");
+
+/// Whether app and firmware come from different releases. Unofficial builds (0.0.0) on either
+/// side are never flagged, and pre-release/build suffixes of the app version are ignored.
+fn is_firmware_version_mismatch(app_version: &str, firmware: &FirmwareVersion) -> bool {
+    let app_core = app_version.split(['-', '+']).next().unwrap_or_default();
+    let firmware = firmware.to_string();
+    app_core != "0.0.0" && firmware != "0.0.0" && app_core != firmware
+}
+
 /// Maximum time to wait for a running background operation when the app closes.
 const EXIT_SYNC_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -403,6 +414,11 @@ impl Controller {
                 .map(|v| v.to_string())
                 .unwrap_or_default()
                 .into(),
+        );
+        ui.set_firmware_mismatch(
+            st.firmware_version
+                .as_ref()
+                .is_some_and(|v| is_firmware_version_mismatch(APP_VERSION, v)),
         );
 
         // Profiles.
@@ -824,7 +840,7 @@ pub fn run() -> Result<()> {
         poll_timer: Timer::default(),
     });
 
-    ui.set_app_version(env!("CARGO_PKG_VERSION").into());
+    ui.set_app_version(APP_VERSION.into());
     ui.set_theme(theme.index());
     ui.set_port_labels(ModelRc::from(controller.port_model.clone()));
     ui.set_profiles(ModelRc::from(controller.profile_model.clone()));
@@ -973,6 +989,22 @@ mod tests {
                 None => SerialPortType::Unknown,
             },
         }
+    }
+
+    #[test]
+    fn firmware_version_mismatch() {
+        let v = |major, minor, patch| FirmwareVersion {
+            major,
+            minor,
+            patch,
+        };
+        assert!(!is_firmware_version_mismatch("1.2.0", &v(1, 2, 0)));
+        assert!(!is_firmware_version_mismatch("1.2.0-rc.3", &v(1, 2, 0)));
+        assert!(is_firmware_version_mismatch("1.2.0", &v(1, 1, 0)));
+        assert!(is_firmware_version_mismatch("1.2.0-rc.3", &v(1, 2, 1)));
+        // Unofficial builds are never flagged.
+        assert!(!is_firmware_version_mismatch("0.0.0+abc1234", &v(1, 2, 0)));
+        assert!(!is_firmware_version_mismatch("1.2.0", &v(0, 0, 0)));
     }
 
     #[test]

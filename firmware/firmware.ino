@@ -12,6 +12,7 @@
 #include "menu.h"
 #include "serializer.h"
 #include "storage.h"
+#include "version.h"
 
 // Display configuration.
 const uint8_t SCREEN_WIDTH{128};
@@ -19,10 +20,6 @@ const uint8_t SCREEN_HEIGHT{64};
 const int8_t OLED_RESET{-1};
 const uint8_t OLED_ADDRESS{0x3C};
 const uint8_t MAX_VISIBLE_PROFILES{4};
-// Firmware version
-#define FIRMWARE_VERSION_MAJOR 1
-#define FIRMWARE_VERSION_MINOR 0
-#define FIRMWARE_VERSION_PATCH 0
 
 // Global variables.
 MenuState currentMenuState{STATE_SPLASH};
@@ -786,6 +783,12 @@ void setup() {
     display.println("  -=[ B.L.A.S.T. ]=-");
     display.println("        |");
     display.println("     (INSERT COIN)");
+
+    // Firmware version centered in the bottom row (6 px per character at text size 1).
+    const char splashVersion[] = "v" FIRMWARE_VERSION_STRING;
+    const int16_t splashVersionX = (SCREEN_WIDTH - static_cast<int16_t>(sizeof(splashVersion) - 1) * 6) / 2;
+    display.setCursor(splashVersionX > 0 ? splashVersionX : 0, SCREEN_HEIGHT - 8);
+    display.print(splashVersion);
 
     display.display();
 
