@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-10-10
+
 ### Changed
 - OLED profile selection wraps around: down on the last profile jumps to the first, up on the first jumps to the last
 
