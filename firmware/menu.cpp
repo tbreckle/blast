@@ -11,6 +11,18 @@ static void drawProtocolIndicator() {
 }
 #endif
 
+// Find the next used profile slot from `from` in direction `step` (+1/-1), wrapping around the ends.
+// Returns `from` if no other slot is used.
+static uint8_t findNextUsedProfile(uint8_t from, int8_t step) {
+    for (uint8_t n = 1; n < MAX_PROFILES; n++) {
+        uint8_t index = (from + MAX_PROFILES + step * n) % MAX_PROFILES;
+        if (isProfileSlotUsed(index)) {
+            return index;
+        }
+    }
+    return from;
+}
+
 void displayProfileSelect() {
     /**
      * Display the profile selection screen.
@@ -40,7 +52,7 @@ void displayProfileSelect() {
     uint8_t usedProfileCount = 0;
     uint8_t selectedSlotIndex = 0;
 
-    for (uint8_t i = 0; i < getNumberOfProfiles(); i++) {
+    for (uint8_t i = 0; i < MAX_PROFILES; i++) {
         if (isProfileSlotUsed(i)) {
             usedProfiles[usedProfileCount] = i;
             if (i == selectedProfileIndex) {
@@ -276,14 +288,10 @@ void handleMenuNavigation(bool up, bool right, bool down, bool left, bool enter)
      * Processes navigation differently based on current menu state.
      */
     if (currentMenuState == STATE_SELECT) {
-        if (up) {
-            if (selectedProfileIndex > 0 && isProfileSlotUsed(selectedProfileIndex - 1)) {
-                selectedProfileIndex--;
-                requestRedraw();
-            }
-        } else if (down) {
-            if (selectedProfileIndex < MAX_PROFILES - 1 && isProfileSlotUsed(selectedProfileIndex + 1)) {
-                selectedProfileIndex++;
+        if (up || down) {
+            uint8_t nextIndex = findNextUsedProfile(selectedProfileIndex, up ? -1 : 1);
+            if (nextIndex != selectedProfileIndex) {
+                selectedProfileIndex = nextIndex;
                 requestRedraw();
             }
         } else if (enter) {

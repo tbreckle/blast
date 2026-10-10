@@ -947,6 +947,42 @@ pub fn run() -> Result<()> {
 
     controller.refresh();
     controller.select_blast_port();
+    // TEMP-REPRO-BEGIN
+    let repro_timer = Timer::default();
+    if let Ok(port) = std::env::var("BLAST_REPRO_PORT") {
+        let n: usize = std::env::var("BLAST_NEW").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+        controller.state.borrow_mut().serial_ports = vec![SerialPortInfo {
+            port_name: port,
+            port_type: SerialPortType::Unknown,
+        }];
+        controller.refresh();
+        let weak = ui.as_weak();
+        let step = std::cell::Cell::new(0usize);
+        repro_timer.start(TimerMode::Repeated, Duration::from_millis(700), move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let s = step.get();
+            if ui.get_busy() {
+                return;
+            }
+            step.set(s + 1);
+            eprintln!("[REPRO] step {s}, profiles {}, message {:?}", ui.get_profiles().row_count(), ui.get_message());
+            if s == 0 {
+                ui.invoke_connect(0);
+            } else if s <= n {
+                ui.invoke_add_profile();
+                ui.set_editor_name(format!("Repro {s}").into());
+                ui.invoke_editor_name_edited(format!("Repro {s}").into());
+                ui.invoke_editor_save();
+            } else if s == n + 1 {
+                eprintln!("[REPRO] pressing save");
+                ui.invoke_save();
+            } else if s == n + 3 {
+                eprintln!("[REPRO] done");
+                let _ = slint::quit_event_loop();
+            }
+        });
+    }
+    // TEMP-REPRO-END
     ui.run()?;
 
     controller.shutdown();
