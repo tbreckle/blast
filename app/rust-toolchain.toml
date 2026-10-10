@@ -1,0 +1,5 @@
+# Pinned toolchain for local builds and CI. Slint 1.18 needs Rust 1.92+.
+[toolchain]
+channel = "1.98"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

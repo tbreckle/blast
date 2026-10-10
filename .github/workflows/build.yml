@@ -54,10 +54,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libudev-dev libfontconfig-dev pkg-config
 
+      # Installs the toolchain pinned in app/rust-toolchain.toml.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+        run: |
+          rustup toolchain install
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          fi
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -120,10 +123,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libudev-dev libfontconfig-dev pkg-config
 
+      # Installs the toolchain pinned in app/rust-toolchain.toml (incl. clippy and rustfmt).
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+        working-directory: app
+        run: rustup toolchain install
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -147,10 +150,10 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      # Installs the toolchain pinned in app/rust-toolchain.toml (incl. clippy and rustfmt).
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+        working-directory: app
+        run: rustup toolchain install
 
       - name: Check formatting
         working-directory: app
