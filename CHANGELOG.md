@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Windows app executable has an icon (`images/blast.ico`, made from the logo artwork) and version details (product name, description, version) in its file properties
+
 ### Changed
 - OLED profile selection wraps around: down on the last profile jumps to the first, up on the first jumps to the last
 
